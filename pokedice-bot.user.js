@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pokédice Autopilot
 // @namespace    pokedice-bot
-// @version      1.7.3
+// @version      1.7.4
 // @description  Joue à Pokédice — modes Progression / Pokédex / Farm / Versus / Raids : combats optimisés, soins, captures, boutique, améliorations, Centre, zones.
 // @match        https://poke-dice.netlify.app/*
 // @grant        none
@@ -591,11 +591,16 @@
     },
 
     t(key, fallback) { return this.i18n.get(key) ?? fallback ?? key; },
-    /** Regex d'un libellé i18n ({param} → .+). */
+    /**
+     * Regex d'un libellé i18n ({param} → .*?). Un paramètre peut être VIDE : l'option de Ball
+     * « {label}{left} : {pct} % de chance{useless} » n'a {useless} que pour les Balls inutiles. Avant la v1.7.4
+     * ({param} → .+?), seules ces Balls « inutiles » étaient reconnues : capture difficile → aucune option vue,
+     * le jeu lançait sa sélection par défaut (Sans Ball) ; capture facile → Hyper Balls gaspillées.
+     */
     re(key, fallback, { exact = false } = {}) {
       const tpl = norm(this.t(key, fallback));
       // Par défaut on tolère un suffixe (badge "Types de dés 2", "CONTINUER Manche 2 sur 2"…)
-      return new RegExp('^' + tpl.split(/\{[^}]+\}/).map(esc).join('.+?') + (exact ? '$' : '(?:\\s.*)?$'));
+      return new RegExp('^' + tpl.split(/\{[^}]+\}/).map(esc).join('.*?') + (exact ? '$' : '(?:\\s.*)?$'));
     },
     dexOf(name) { return this.frNameToDex.get(norm(name)) ?? null; },
     nameOf(dex) { return this.dexName.get(dex) ?? this.D.species[dex]?.name ?? `#${dex}`; },
@@ -836,7 +841,7 @@
     const myExpDmg = myStats ? Rt.E.avgDamage(myStats.dice, { attackerTypes: myStats.types, defTypes: foeTypes, levels }) : 5;
 
     return {
-      region, dice, rerollsLeft, rerollBtn, attackBtn, bagBtn, skipTurnBtn, shownDmg, switchBtns, isTrainer,
+      region, raid, dice, rerollsLeft, rerollBtn, attackBtn, bagBtn, skipTurnBtn, shownDmg, switchBtns, isTrainer,
       ctx: {
         attackerTypes: myStats?.types ?? [], defTypes: foeTypes, levels,
         foe: { name: foeName?.trim(), dex: foeDex, hp: foeHp, maxHp: foeMax ?? 50, pct: foePct, expDmg: foeExpDmg, stats: foeStats },
@@ -982,6 +987,8 @@
    * donc le remplaçant est évalué après avoir encaissé un coup). Un seul par adversaire.
    */
   function voluntarySwitch(b) {
+    // Raid : changer coûte le tour et ouvre une fenêtre propre au raid → jamais (le boss ne change pas)
+    if (b.raid || mem.fightKind === 'raid') return null;
     if (!Rt.D.config.allowVoluntarySwitch || !b.ctx.foe.stats || !b.ctx.me.stats) return null;
     const key = `${b.ctx.foe.dex}@${b.ctx.foe.maxHp}`;
     if (mem.switchedFor === key) return null;
@@ -1814,8 +1821,8 @@
    * v1.7.2 une espèce non lue passait pour déjà capturée → Ball la moins chère, voire Sans Ball.
    */
   function catchScreenDex() {
-    for (const key of ['ui.catch.wornOut', 'ui.catch.again', 'ui.catch.stayed', 'ui.catch.baitAsk']) {
-      const name = captureParam(key, 'name');
+    for (const [key, param] of [['ui.catch.wornOut', 'name'], ['ui.catch.again', 'name'], ['ui.catch.stayed', 'name'], ['ui.catch.baitAsk', 'name'], ['ui.raid.log.won', 'boss']]) {
+      const name = captureParam(key, param);
       const dex = name && (Rt.dexOf(name) ?? Rt.dexOf(name.replace(/^\S+\s+/, '')));
       if (dex) return dex;
     }
@@ -1849,7 +1856,11 @@
       const pct = +(t.match(/(\d+)\s*%/)?.[1] ?? NaN);
       return ballRe.test(t) && Number.isFinite(pct) ? { el, t, pct } : null;
     }).filter(Boolean);
-    const legendary = bodyHas('ui.catch.theLegendary');
+    // Raid : le boss (légendaire ou fabuleux) se capture avec la meilleure chance, Master Ball comprise.
+    // Avant la v1.7.4, si le raid n'avait pas été noté (mem.rare), une espèce déjà vue recevait la Ball la moins chère.
+    const inRaid = mem.fightKind === 'raid' || !!readBattle()?.raid || /^\/(raid\/|events\/raid)/.test(location.pathname);
+    if (inRaid) mem.rare = { dex: mem.raid?.dex ?? mem.rare?.dex ?? null, why: 'raid' };
+    const legendary = bodyHas('ui.catch.theLegendary') || inRaid;
     // Nouvelle espèce ? On regarde l'espèce affichée ici, puis (repli) ce qu'a noté l'écran de rencontre
     const dex = catchScreenDex() ?? mem.rare?.dex ?? null;
     if (dex && !mem.rare?.why?.match(/chromatique|raid|légendaire/) && !obtainedDex(readSave()).has(dex)) mem.rare = { dex, why: 'nouvelle espèce' };
@@ -2488,15 +2499,6 @@
     // Intro du raid : GO !
     const goBtn = btn(['ui.raid.intro.go', 'ui.raid.intro.skip']);
     if (goBtn) { goBtn.click(); return true; }
-    // Combat en cours : tour des alliés / riposte du boss → on accélère les alliés et on attend (ce n'est pas de l'inactivité)
-    if (readBattle()) {
-      r.idle = 0;
-      mem.fightKind = 'raid';
-      mem.rare = { dex: r.dex, why: 'raid' };
-      const speed = $$('button[aria-pressed="false"]').find((x) => visible(x) && norm(x.getAttribute('aria-label')) === norm(Rt.t('ui.raid.speed', '§')));
-      if (speed && !r.sped) { r.sped = true; speed.click(); log('⏩ Raid : tours des alliés accélérés'); }
-      return true;
-    }
     // Choix des PNJ alliés : les plus super efficaces contre le boss
     const cardRe = Rt.re('ui.raid.npcPick.card', '{name} : {team}, N.{level}');
     const cards = $$('button[aria-label]').filter((x) => visible(x) && cardRe.test(norm(x.getAttribute('aria-label'))));
@@ -2535,7 +2537,7 @@
       return true;
     }
     // Raid du jour d'une espèce déjà au Pokédex : passé (réglage raidOnlyMissing), sauf combat ou capture en cours
-    if (r.key === 'daily' && CONFIG.raidOnlyMissing && r.dex && !btn('ui.raid.again') && obtainedDex(readSave()).has(r.dex) && !lineHas('ui.raid.result.caught')) {
+    if (r.key === 'daily' && CONFIG.raidOnlyMissing && r.dex && !readBattle() && !btn('ui.raid.again') && obtainedDex(readSave()).has(r.dex) && !lineHas('ui.raid.result.caught')) {
       setActState({ raidDone: utcDay() });
       log(`🐉 Raid du jour : ${Rt.nameOf(r.dex)} est déjà au Pokédex → passé`);
       mem.raid = null;
@@ -2550,6 +2552,24 @@
       mem.raid = null;
       const b = btn(['ui.raid.back', 'ui.common.continue']); if (b) { b.click(); return true; }
       return goHome();
+    }
+    // Combat en cours : tour des alliés / riposte du boss → on accélère les alliés et on attend (ce n'est pas de l'inactivité).
+    // Placé APRÈS les résultats : la section du combat reste affichée sous « Raid perdu » / « capturé » (avant la v1.7.4,
+    // le bot croyait le combat toujours en cours et restait bloqué devant Retour / Réessayer).
+    if (readBattle()) {
+      r.idle = 0;
+      mem.fightKind = 'raid';
+      mem.rare = { dex: r.dex, why: 'raid' };
+      // Fenêtre « changer de Pokémon » ou « abandonner » ouverte : on la ferme (changer coûte le tour en raid)
+      const d = dialog();
+      if (d && (bodyHas('ui.battle.switchCosts') || bodyHas('ui.raid.giveUpTitle'))) {
+        const keep = btn('ui.raid.keepFighting', { scope: d });
+        if (keep) keep.click(); else closeDialog();
+        return true;
+      }
+      const speed = $$('button[aria-pressed="false"]').find((x) => visible(x) && norm(x.getAttribute('aria-label')) === norm(Rt.t('ui.raid.speed', '§')));
+      if (speed && !r.sped) { r.sped = true; speed.click(); log('⏩ Raid : tours des alliés accélérés'); }
+      return true;
     }
     if (await ensureRaidTeam(r)) return true;
     if (await ensureRaidFriends(r)) return true;
@@ -4159,7 +4179,7 @@
   }
 
   const api = { itemEvolutions, evolutionTargets, healTierFor, shopTiers, bot, CONFIG, MODES, DEFAULTS, setMode, setOption, resetOptions, setTeamLock, bossMatchup, bossTeam, journal, Rt, mem, readBattle, teamMons, boxMons,
-    upgradeCandidates, comboGains, catchScreenDex, captureParam, ballItemOf, upgradePick, xpShare, usefulXp, pickTrainees, catchOnlyDex, wildShare, dexWorthEvolving, dexUsefulEvolutions, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, ensureRaidTeam, openRaids, nextRaid, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
+    upgradeCandidates, comboGains, catchScreenDex, captureParam, ballItemOf, upgradePick, xpShare, usefulXp, pickTrainees, catchOnlyDex, wildShare, dexWorthEvolving, dexUsefulEvolutions, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, ensureRaidTeam, openRaids, nextRaid, playRaidPage, playCatch, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
     areaThreats, missingSpecies, desiredArea, buildData, Engine,
     obtainedDex, fossilTargets, catchTargetDex, targetArea, wantLuck, canBreed, dayCarePick, dayCareDue, eventOpen, rebattleState, rebattleMatchup, rebattleDue,
     raidBossHp, raidOdds, raidTrainee, parseSchedule, scheduledMode, Stats, noteCatchResult, notify, WakeLock };

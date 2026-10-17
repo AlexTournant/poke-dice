@@ -6,6 +6,15 @@ Chaque section `## [X.Y.Z]` correspond à un tag `vX.Y.Z`. Les notes de la relea
 
 ## [Non publié]
 
+## [1.7.4]
+
+### Corrigé
+
+- **Capture : les options de Ball n'étaient presque jamais reconnues.** Le libellé du jeu est « {label}{left} : {pct} % de chance{useless} », et `{useless}` n'est rempli que pour une Ball inutile (« , inutile »). Le bot exigeait au moins un caractère pour chaque paramètre (`Rt.re`) : seules les Balls inutiles étaient reconnues. Capture difficile : aucune option vue, le jeu lançait sa sélection par défaut (« Sans Ball »). Capture facile : des Hyper Balls gaspillées. Un paramètre peut maintenant être vide.
+- Raids : bloqué sur « Retour / Réessayer » (et sur « capturé ! »). La section du combat reste affichée sous le résultat, et le bot croyait le combat toujours en cours. Les résultats sont maintenant traités avant l'attente du combat.
+- Raids : blocage au changement de tour. Le bot pouvait demander un changement de Pokémon (règle des dresseurs), qui coûte le tour en raid et ouvre une fenêtre propre au raid. Plus aucun changement volontaire en raid ; une fenêtre « changer » ou « abandonner » restée ouverte est refermée (« Continuer »).
+- Raids : le boss recevait une Ball ordinaire si le raid n'avait pas été noté avant la capture (espèce déjà vue → Ball la moins chère). Une capture en raid prend maintenant toujours la meilleure chance, Master Ball comprise. Le boss est aussi reconnu par le texte « {boss} est épuisé ! Lance une Ball ! ».
+
 ## [1.7.3]
 
 ### Corrigé
