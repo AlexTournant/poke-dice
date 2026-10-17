@@ -1239,3 +1239,51 @@ test('Régions : la fenêtre du partenaire est trouvée même par-dessus la list
     assert.equal(balls[1].clicks, 1, 'Poké Ball 2 = Héricendre');
   } finally { document.querySelectorAll = before; P.Rt.i18n.clear(); P.Rt.frNameToDex.clear(); P.setOption('starterPick.johto', '', { persist: false }); P.mem.regionGo = null; }
 });
+
+test('Régions : écran « Tu veux choisir Germignon ? » (DOM réel du joueur) — Choisir ou Pas celui-ci selon le réglage', async () => {
+  setup({ box: [['a', 999, 60]], team: ['a'], pokedex: [999] });
+  P.Rt.D.regions.johto = { id: 'johto', name: 'Johto', orderIndex: 1, dexRange: [152, 251], starters: [152, 155, 158], enabled: true };
+  for (const [dex, name] of [[152, 'Germignon'], [155, 'Héricendre'], [158, 'Kaiminus']]) { addMon(dex, name, 'normal', 250); P.Rt.frNameToDex.set(name.toUpperCase(), dex); }
+  for (const [k, v] of [['ui.partner.label', 'Choisis ton partenaire à {region}'], ['ui.partner.ball', 'Poké Ball {n} sur 3'], ['ui.partner.out', '{name}, sorti de sa Poké Ball'], ['ui.partner.yes', 'Choisir {name}'], ['ui.partner.no', 'Pas celui-ci'], ['ui.partner.go', 'C’est parti !']]) P.Rt.i18n.set(k, v);
+  // Écran collé par le joueur : Poké Ball 1 ouverte (Germignon), boutons Pas celui-ci / Choisir Germignon
+  const balls = [fakeEl({ attrs: { 'aria-label': 'Germignon, sorti de sa Poké Ball' } }), fakeEl({ attrs: { 'aria-label': 'Poké Ball 2 sur 3' } }), fakeEl({ attrs: { 'aria-label': 'Poké Ball 3 sur 3' } })];
+  const leave = fakeEl({ attrs: { 'aria-label': 'Pas maintenant' }, innerText: '✕' });
+  const no = fakeEl({ innerText: 'Pas celui-ci' }), yes = fakeEl({ innerText: 'Choisir Germignon' });
+  const all = [...balls, leave, no, yes];
+  const dlg = fakeEl({ attrs: { role: 'dialog', 'aria-label': 'Choisis ton partenaire à Johto' } });
+  dlg.querySelectorAll = (sel) => (sel === 'button[aria-label]' ? [...balls, leave] : sel.startsWith('button') ? all : []);
+  const before = document.querySelectorAll;
+  document.querySelectorAll = (sel) => (sel === '[role=dialog]' ? [dlg] : sel.startsWith('button') ? all : []);
+  document.body.innerText = ['Tu veux choisir Germignon ?', 'Germignon', 'Plante', 'Pas celui-ci', 'Choisir Germignon'].join('\n');
+  P.mem.regionGo = null; // fenêtre ouverte à la main : la région se lit dans le titre
+  try {
+    P.setOption('starterPick.johto', 152, { persist: false });
+    await P.playPartner(P.partnerDialog());
+    assert.equal(yes.clicks, 1, 'Germignon voulu : Choisir Germignon');
+    P.setOption('starterPick.johto', 158, { persist: false });
+    await P.playPartner(P.partnerDialog());
+    assert.equal(no.clicks, 1, 'Kaiminus voulu : Pas celui-ci');
+    assert.equal(yes.clicks, 1);
+  } finally { document.querySelectorAll = before; document.body.innerText = ''; P.Rt.i18n.clear(); P.Rt.frNameToDex.clear(); P.setOption('starterPick.johto', '', { persist: false }); }
+});
+
+test('Régions : depuis Johto, les raids et événements débloqués à Kanto restent visibles (sauvegarde rangée par région)', () => {
+  const save = setup({ box: [['a', 999, 60]], team: ['a'], pokedex: [999] });
+  P.Rt.D.areas.cave.regionId = 'kanto'; P.Rt.D.areas.forest.regionId = 'kanto';
+  P.Rt.D.areas.j29 = { id: 'j29', name: 'Route 29', regionId: 'johto', orderIndex: 100, wildPool: [] };
+  P.Rt.D.areaList.push(P.Rt.D.areas.j29);
+  P.Rt.D.config.events = { raid: { access: 'all', unlockAreaId: 'forest' }, wheel: { access: 'all', unlockAreaId: 'forest' } };
+  // On joue à Johto : la sauvegarde de Kanto est rangée dans parked.kanto
+  save.region = 'johto'; save.currentAreaId = 'j29'; save.areaProgress = { j29: {} }; save.pokedex = [152];
+  save.parked = { kanto: { areaProgress: { forest: { cleared: true }, cave: { cleared: true, bossesDefeated: [] } }, pokedex: [999, 10, 16] } };
+  localStorage.removeItem('pokebot.activity');
+  try {
+    assert.ok(P.eventOpen('raid', save), 'raid du jour débloqué par une zone de Kanto');
+    assert.ok(P.eventOpen('wheel', save), 'roue aussi');
+    assert.equal(P.raidStatus(save, P.Rt.D.areas.cave, { dex: 26 }), 'open', 'Raichu (grotte de Kanto) ouvert, vu depuis Johto');
+    const raids = P.openRaids(save).map((r) => r.key);
+    assert.ok(raids.includes('daily') && raids.includes('cave/26'), 'raid du jour + raid légendaire de Kanto : ' + raids);
+    save.parked.kanto.pokedex.push(26);
+    assert.ok(P.legendaryRaids(save, { all: true })[0].caught, 'Pokédex de Kanto (pas celui de Johto) pour savoir si l’espèce est déjà vue');
+  } finally { delete P.Rt.D.config.events; P.Rt.D.areaList.pop(); delete P.Rt.D.areas.j29; }
+});
