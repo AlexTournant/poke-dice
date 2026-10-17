@@ -1287,3 +1287,55 @@ test('Régions : depuis Johto, les raids et événements débloqués à Kanto re
     assert.ok(P.legendaryRaids(save, { all: true })[0].caught, 'Pokédex de Kanto (pas celui de Johto) pour savoir si l’espèce est déjà vue');
   } finally { delete P.Rt.D.config.events; P.Rt.D.areaList.pop(); delete P.Rt.D.areas.j29; }
 });
+
+test('Régions : à Johto, la Progression reste à Johto (zones de Kanto sans regionId = Kanto, comme le jeu)', () => {
+  P.setMode('progression', { persist: false });
+  const save = setup({ box: [['a', 999, 20]], team: ['a'], pokedex: [999] });
+  // Zones de Kanto du test : sans regionId (le jeu les range à Kanto par défaut)
+  for (const id of ['route1', 'forest', 'cave']) delete P.Rt.D.areas[id].regionId;
+  P.Rt.D.areas.j29 = { id: 'j29', name: 'Route 29', regionId: 'johto', orderIndex: 100, minLevel: 2, maxLevel: 5, wildPool: [] };
+  P.Rt.D.areas.j30 = { id: 'j30', name: 'Routes 30 & 31', regionId: 'johto', orderIndex: 101, minLevel: 3, maxLevel: 8, wildPool: [] };
+  P.Rt.D.areaList.push(P.Rt.D.areas.j29, P.Rt.D.areas.j30);
+  try {
+    save.region = 'johto'; save.areaProgress = { j29: { cleared: true } };
+    save.currentAreaId = 'route1'; // même si la zone courante enregistrée est restée à Kanto
+    assert.equal(P.regionId ? P.regionId(save) : 'johto', 'johto');
+    const next = P.desiredArea(save);
+    assert.notEqual(next?.id, 'route1', 'jamais la Route 1 de Kanto');
+    save.currentAreaId = 'j29';
+    assert.equal(P.desiredArea(save)?.id, 'j30', 'Route 29 finie → Routes 30 & 31');
+  } finally { P.Rt.D.areaList.splice(-2, 2); delete P.Rt.D.areas.j29; delete P.Rt.D.areas.j30; }
+});
+
+test('Régions : retour dans une région déjà jouée — Revanche à Kanto depuis Johto, puis retour à Johto en Progression', async () => {
+  const save = setup({ box: [['a', 999, 60]], team: ['a'], pokedex: [999] });
+  P.Rt.D.regions.kanto = { ...P.Rt.D.regions.kanto, id: 'kanto', name: 'Kanto', leagueAreaId: 'cave', nextRegion: 'johto', starters: [1, 4, 7], orderIndex: 0 };
+  P.Rt.D.regions.johto = { id: 'johto', name: 'Johto', orderIndex: 1, dexRange: [152, 251], starters: [152, 155, 158], enabled: true, leagueAreaId: 'jleague' };
+  P.Rt.D.areas.j29 = { id: 'j29', name: 'Route 29', regionId: 'johto', orderIndex: 100, wildPool: [] };
+  P.Rt.D.areaList.push(P.Rt.D.areas.j29);
+  P.Rt.D.trainers.e1 = { id: 'e1', name: 'Olga', team: [{ dex: 16, level: 20 }] };
+  P.Rt.D.config.rebattleLineups = { kanto: { bronze: ['e1'] } };
+  P.Rt.D.config.events = { rebattle: { access: 'all', tiers: [{ id: 'bronze', gold: 1, upgradeDelta: 1 }] } };
+  // À Johto ; Kanto (Ligue gagnée, revanche bronze à faire) est rangée dans parked.kanto
+  save.region = 'johto'; save.currentAreaId = 'j29'; save.areaProgress = { j29: {} }; save.pokedex = [152];
+  save.parked = { kanto: { areaProgress: { cave: { cleared: true }, route1: { cleared: true }, forest: { cleared: true } }, pokedex: [999, 10, 16, 25, 104] } };
+  P.mem.regionGo = null; P.mem.regionFail = false;
+  try {
+    assert.ok(P.rebattleState(save, 'kanto'), 'revanche de Kanto disponible (vue depuis Johto)');
+    P.setMode('rebattle', { persist: false });
+    assert.equal(P.playedRegionTarget(save)?.id, 'kanto', 'mode Revanche : on retourne à Kanto');
+    // Le bot clique la carte « Kanto : passer à cette région et voir ses zones »
+    P.Rt.i18n.set('ui.home.regionGo', '{region} : passer à cette région et voir ses zones');
+    const card = fakeEl({ attrs: { 'aria-label': 'Kanto : passer à cette région et voir ses zones' } });
+    const before = document.querySelectorAll;
+    document.querySelectorAll = (sel) => (sel === 'button[aria-label]' ? [card] : []);
+    try { assert.ok(await P.regionTick(save)); } finally { document.querySelectorAll = before; }
+    assert.equal(card.clicks, 1);
+    // Arrivé à Kanto, en Progression : la Ligue de Kanto est gagnée, Johto non → retour à Johto
+    P.mem.regionGo = null;
+    save.region = 'kanto'; save.currentAreaId = 'cave'; save.areaProgress = save.parked.kanto.areaProgress; save.pokedex = save.parked.kanto.pokedex;
+    save.parked = { johto: { areaProgress: { j29: {} }, pokedex: [152] } };
+    P.setMode('progression', { persist: false });
+    assert.equal(P.playedRegionTarget(save)?.id, 'johto', 'Progression : retour à la région pas finie');
+  } finally { P.mem.regionGo = null; P.Rt.i18n.clear(); P.Rt.D.areaList.pop(); delete P.Rt.D.areas.j29; delete P.Rt.D.config.events; delete P.Rt.D.config.rebattleLineups; P.setMode('progression', { persist: false }); }
+});
