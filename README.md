@@ -26,11 +26,25 @@ Le menu de l'extension Tampermonkey donne accès aux mêmes actions (démarrer, 
 ### Modes
 
 - **Progression** : enchaîne les zones et les arènes.
-- **Pokédex : captures** : reste dans les zones où il manque des espèces sauvages, capture les espèces nouvelles avec la Ball la moins chère qui suffit.
+- **Pokédex : captures** : reste dans les zones où il manque des espèces sauvages et capture chaque nouvelle espèce avec la meilleure chance disponible (Ball, appât, amélioration « Chance de capture »). Les fossiles en cours de réveil comptent comme obtenus ; les fossiles d'espèces manquantes sont achetés ou cherchés dans leur zone.
 - **Pokédex : évolutions** : recapture les espèces qui débloquent une évolution par niveau manquante, entraîne le Pokémon le plus proche du palier, utilise les pierres possédées.
 - **Farm** : reste dans une zone choisie (XP, ₽, chromatiques), avec l'équipe verrouillée. Objectif « ₽ » : choisit la zone la plus rentable.
 - **Versus** : compose une équipe taillée contre chaque adversaire (3 Pokémon au N.50, compte connecté requis), sinon joue dans le mode de repli.
-- **Raids** : raid du jour et raids légendaires des zones terminées, avec une équipe composée contre le boss.
+- **Raids** : raid du jour et raids légendaires des zones terminées. L'équipe, les alliés PNJ et les amis sont choisis sur les dégâts infligés au boss (règles de type du raid). Si l'estimation prévoit une défaite nette, le bot arrête pour la journée et entraîne un « contre » au Centre.
+
+Dans tous les modes, une **espèce visée** (onglet Captures) emmène le bot dans la zone où elle apparaît le plus, jusqu'à sa capture.
+
+### Routines (tous modes)
+
+- **Roue de la fortune** : le tour gratuit du jour.
+- **Pension** : fait éclore les Œufs (l'espèce est tirée au hasard, 4× plus souvent parmi celles qui manquent au Pokédex) et y dépose un couple compatible de la Boîte, choisi parmi les plus bas niveaux.
+- **Revanche du Conseil 4** (désactivée par défaut) : enchaîne les paliers quand l'équipe est prête, s'arrête après N défaites par jour.
+
+### Confort
+
+- **Notifications** du navigateur (avec un petit son) : chromatique, légendaire, boss battu, raid réussi, Œuf chromatique, bot arrêté.
+- **Planning** : change de mode selon l'heure, par exemple `08:00-23:00=pokedex; 23:00-08:00=farm`.
+- **Statistiques** (onglet Bilan) : captures, chromatiques, taux de réussite de chaque Ball, raids, Œufs, tours de roue.
 
 ### Économie
 
