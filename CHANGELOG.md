@@ -6,6 +6,12 @@ Chaque section `## [X.Y.Z]` correspond à un tag `vX.Y.Z`. Les notes de la relea
 
 ## [Non publié]
 
+## [1.7.1]
+
+### Modifié
+
+- Capture : la règle du seuil de 80 % (v1.6.1) ne s'applique plus qu'aux espèces absentes du Pokédex. Une espèce déjà capturée reçoit de nouveau la Ball la moins chère (`catchKnown: 'cheap'`, le défaut d'avant la v1.6.1). La règle du seuil reste disponible pour elles dans le panneau.
+
 ## [1.7.0]
 
 ### Ajouté
