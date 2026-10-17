@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pokédice Autopilot
 // @namespace    pokedice-bot
-// @version      1.7.7
+// @version      1.8.0
 // @description  Joue à Pokédice — modes Progression / Pokédex / Farm / Versus / Raids : combats optimisés, soins, captures, boutique, améliorations, Centre, zones.
 // @match        https://poke-dice.netlify.app/*
 // @grant        none
@@ -122,6 +122,7 @@
     // Évolutions par objet (Pierres…) : Équipe → Pokémon → UTILISER UN OBJET
     useEvolutionItems: true,      // utilise les objets du Sac qui font évoluer en une espèce absente du Pokédex
     buyEvolutionItems: 'pokedex', // achète les objets manquants : 'pokedex' (mode Pokédex seulement), 'always' ou 'never'
+    stoneGoldFarm: true,          // mode Pokédex : évolutions — il manque des ₽ pour une pierre utile → farm ₽ dans la zone la plus rentable
     urgentBudgetRatio: 0.8,       // part max de l'or pour atteindre le stock plancher de Balls
     consumableBudgetRatio: 0.45,  // part max de l'or pour les autres consommables
 
@@ -1403,12 +1404,37 @@
     const wild = wildDexes(area);
     if (focus !== 'evo') return wild.filter((d) => !caught.has(d));
     const ownedReach = new Set();
-    for (const m of [...teamMons(save), ...boxMons(save)]) { ownedReach.add(m.dex); for (const d of evoDescendants(m.dex, region)) if (d.level != null) ownedReach.add(d.toDex); }
+    // évolutions par niveau ET par objet (pierre…) : on capture la base qu'on n'a pas, puis on l'entraîne ou on lui donne l'objet
+    for (const m of [...teamMons(save), ...boxMons(save)]) { ownedReach.add(m.dex); for (const d of evoDescendants(m.dex, region)) if (d.level != null || d.item) ownedReach.add(d.toDex); }
     const need = new Set();
     for (const w of wild) for (const d of evoDescendants(w, region)) {
-      if (d.level != null && !caught.has(d.toDex) && !ownedReach.has(d.toDex) && inRegionDex(d.toDex, region)) need.add(w);
+      if ((d.level != null || d.item) && !caught.has(d.toDex) && !ownedReach.has(d.toDex) && inRegionDex(d.toDex, region)) need.add(w);
     }
     return [...need];
+  }
+
+  /**
+   * Mode « Pokédex : évolutions » — objets d'évolution (Pierres…) à se procurer : un par espèce manquante qu'un Pokémon
+   * possédé atteint avec cet objet. En vente (badges suffisants) → à acheter ; sinon zones où on le trouve (lootPool).
+   * @returns {{item:string, price:number, inShop:boolean, areas:string[], toDex:number[]}[]}
+   */
+  function stoneNeeds(save = readSave()) {
+    const badges = badgeCount(save);
+    const region = regionId(save);
+    const by = new Map();
+    for (const t of itemEvolutions(save)) {
+      if (t.owned > 0) continue;
+      const it = Rt.D.items[t.item];
+      const cur = by.get(t.item) ?? { item: t.item, price: it?.price ?? Infinity, inShop: !!it?.inShop && (it.shopBadges ?? 0) <= badges && itemOn(t.item), toDex: [], areas: Rt.D.areaList.filter((a) => a.regionId === region && (a.lootPool ?? []).some((l) => l.itemKey === t.item && (l.weight ?? 1) > 0)).map((a) => a.id) };
+      cur.toDex.push(t.toDex);
+      by.set(t.item, cur);
+    }
+    return [...by.values()];
+  }
+  /** ₽ qui manquent pour acheter toutes les pierres utiles en vente (0 si tout est payable). */
+  function stoneGoldShortfall(save = readSave()) {
+    const cost = stoneNeeds(save).filter((n) => n.inShop).reduce((sum, n) => sum + n.price, 0);
+    return Math.max(0, cost - Math.max(0, (save?.gold ?? 0) - CONFIG.goldReserve));
   }
 
   /** Zone déjà ouverte : visitée (présente dans la sauvegarde) ou prochaine zone du parcours. */
@@ -1455,9 +1481,26 @@
     if (CONFIG.mode === 'pokedex') {
       // captures : zones avec des espèces sauvages jamais capturées ; évolutions : zones où recapturer une lignée
       if (missingSpecies(cur, save).length && !dexStalled(cur)) return cur;
+      // Évolutions : il manque de l'or pour des pierres en vente → on va dans la zone qui rapporte le plus de ₽
+      if (CONFIG.dexFocus === 'evo' && CONFIG.stoneGoldFarm && CONFIG.buyEvolutionItems !== 'never') {
+        const short = stoneGoldShortfall(save);
+        const goldArea = short > 0 ? bestGoldArea(save) : null;
+        if (goldArea) {
+          const sig = `${goldArea.id}|${Math.ceil(short / 50)}`;
+          if (mem.stoneFarmLog !== sig) { mem.stoneFarmLog = sig; log(`💎 évolutions par pierre : il manque ₽${short} pour ${stoneNeeds(save).filter((n) => n.inShop).map((n) => Rt.t('item.' + n.item, n.item)).join(', ')} → farm ₽ à ${Rt.areaLabel(goldArea)}`); }
+          return goldArea;
+        }
+      }
       const region = cur?.regionId ?? save?.region;
       const cand = Rt.D.areaList.find((a) => a.regionId === region && a.id !== cur?.id && isUnlocked(a, save) && !mem.travelFail.has(a.id) && !dexStalled(a) && missingSpecies(a, save).length && readyForArea(a, save));
       if (cand) return cand;
+      // Pierre introuvable en boutique mais trouvable en explorant une zone ouverte
+      if (CONFIG.dexFocus === 'evo') {
+        const lootIds = new Set(stoneNeeds(save).filter((n) => !n.inShop).flatMap((n) => n.areas));
+        if (lootIds.has(cur?.id) && !dexStalled(cur)) return cur;
+        const la = Rt.D.areaList.find((a) => lootIds.has(a.id) && isUnlocked(a, save) && !mem.travelFail.has(a.id) && !dexStalled(a) && readyForArea(a, save));
+        if (la) return la;
+      }
       // Plus d'espèce sauvage : une zone où l'on trouve un fossile d'espèce manquante (objet trouvé en explorant)
       if (CONFIG.dexFocus === 'catch') {
         const fos = new Set(fossilTargets(save).filter((f) => !f.inShop || !CONFIG.buy.fossil).flatMap((f) => f.areas));
@@ -3187,8 +3230,11 @@
 
   /** Or à garder pour les consommables : les améliorations ne doivent pas vider la bourse avant les soins/Balls. */
   function consumablesReserve(save) {
-    const cost = shopWishlist(save).reduce((n, w) => n + w.qty * priceOf(w.key), 0);
-    return CONFIG.goldReserve + Math.min(cost, Math.floor((save?.gold ?? 0) * 0.6));
+    const wish = shopWishlist(save);
+    const cost = wish.filter((w) => w.family !== 'stone').reduce((n, w) => n + w.qty * priceOf(w.key), 0);
+    // Mode « Pokédex : évolutions » : les pierres utiles sont réservées en entier (les améliorations attendent)
+    const stones = CONFIG.mode === 'pokedex' && CONFIG.dexFocus === 'evo' ? wish.filter((w) => w.family === 'stone').reduce((n, w) => n + w.qty * priceOf(w.key), 0) : 0;
+    return CONFIG.goldReserve + Math.min(cost, Math.floor((save?.gold ?? 0) * 0.6)) + stones;
   }
 
   /**
@@ -3325,7 +3371,8 @@
     const take = (w, key, price) => {
       const pool = w.urgent ? gold : spendable; // l'urgence peut entamer la réserve
       const left = pool - spent;
-      const share = CONFIG.shopShares[w.urgent ? 'urgent' : w.family] ?? 0.2;
+      const evoStone = w.family === 'stone' && CONFIG.mode === 'pokedex' && CONFIG.dexFocus === 'evo';
+      const share = evoStone ? Math.max(0.9, CONFIG.shopShares.stone ?? 0) : CONFIG.shopShares[w.urgent ? 'urgent' : w.family] ?? 0.2;
       let qty = Math.min(w.qty, Math.floor((pool * share) / price), Math.floor(left / price));
       if (qty <= 0 && w.urgent && price <= left) qty = 1;
       return Math.max(0, qty);
@@ -3797,6 +3844,7 @@
         { p: 'buy.cure', t: 'bool', l: 'Remèdes de statut' },
         { p: 'buy.ether', t: 'bool', l: 'Huiles (relances)' },
         { p: 'buyEvolutionItems', t: 'sel', l: 'Objets d’évolution', o: [['never', 'jamais'], ['pokedex', 'en mode Pokédex : évolutions'], ['always', 'toujours']] },
+        { p: 'stoneGoldFarm', t: 'bool', l: '↳ Pokédex : évolutions — farm ₽ pour les pierres manquantes', h: 'Il manque de l’or pour une pierre utile : le bot va dans la zone ouverte qui rapporte le plus de ₽ (sans risque), et réserve cet or (les améliorations attendent).' },
         { p: 'buy.dieUpgrades', t: 'bool', l: 'Améliorations des dés' },
         { p: 'buy.comboUpgrades', t: 'bool', l: 'Améliorations des combos' },
         { p: 'buy.offline', t: 'bool', l: 'Gains hors ligne (Général)' },
@@ -4227,7 +4275,7 @@
   }
 
   const api = { itemEvolutions, evolutionTargets, healTierFor, shopTiers, bot, CONFIG, MODES, DEFAULTS, setMode, setOption, resetOptions, setTeamLock, bossMatchup, bossTeam, journal, Rt, mem, readBattle, teamMons, boxMons,
-    upgradeCandidates, centerCandidates, comboGains, catchScreenDex, captureParam, ballItemOf, upgradePick, xpShare, usefulXp, pickTrainees, catchOnlyDex, wildShare, dexWorthEvolving, dexUsefulEvolutions, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, battleItems, ensureRaidTeam, openRaids, nextRaid, playRaidPage, playCatch, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
+    upgradeCandidates, stoneNeeds, stoneGoldShortfall, consumablesReserve, centerCandidates, comboGains, catchScreenDex, captureParam, ballItemOf, upgradePick, xpShare, usefulXp, pickTrainees, catchOnlyDex, wildShare, dexWorthEvolving, dexUsefulEvolutions, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, battleItems, ensureRaidTeam, openRaids, nextRaid, playRaidPage, playCatch, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
     areaThreats, missingSpecies, desiredArea, buildData, Engine,
     obtainedDex, fossilTargets, catchTargetDex, targetArea, wantLuck, canBreed, dayCarePick, dayCareDue, eventOpen, rebattleState, rebattleMatchup, rebattleDue,
     raidBossHp, raidOdds, raidTrainee, parseSchedule, scheduledMode, Stats, noteCatchResult, notify, WakeLock };
