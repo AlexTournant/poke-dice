@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pokédice Autopilot
 // @namespace    pokedice-bot
-// @version      1.4.1
+// @version      1.5.1
 // @description  Joue à Pokédice — modes Progression / Pokédex / Farm / Versus / Raids : combats optimisés, soins, captures, boutique, améliorations, Centre, zones.
 // @match        https://poke-dice.netlify.app/*
 // @grant        none
@@ -90,9 +90,10 @@
     economy: true,
     goldReserve: 20,
     // Ce que le bot a le droit d'acheter (panneau ⚙️ → Dépenses)
-    buy: { heal: true, ball: true, rareBall: true, cure: true, ether: true, dieUpgrades: true, comboUpgrades: true, offline: true, luck: false, sell: true },
+    buy: { heal: true, ball: true, rareBall: true, cure: true, ether: true, dieUpgrades: true, comboUpgrades: true, offline: true, luck: false, sell: true, bait: true, fossil: true },
+    pokedexLuck: true,            // mode Pokédex (captures) : achète "Chance de capture" même si buy.luck est coupé
     // Stocks de REPLI (avant d'avoir mesuré la consommation réelle). Un objet plus fort compte pour un plus faible.
-    stock: { heal: 4, ball: 8, rareBall: 2, cure: 1, ether: 1 },
+    stock: { heal: 4, ball: 8, rareBall: 2, cure: 1, ether: 1, bait: 3 },
     stockHorizon: 25,             // stocks dimensionnés pour ~25 rencontres de consommation mesurée
     rateWindow: 60,               // consommation mesurée sur les 60 dernières rencontres
     healMaxStock: 10,
@@ -101,7 +102,7 @@
     healMinStock: 2,              // sous ce seuil de soins (du bon palier), achat prioritaire
     bossHealStock: 4,             // boss en attente : au moins N soins du bon palier (réserve avant le combat qui compte)
     healTargetRatio: 0.5,         // palier de soin acheté : il doit rendre ≥ 50 % des PV max du plus gros Pokémon de l'équipe
-    shopShares: { heal: 0.35, ball: 0.3, rareBall: 0.25, stone: 0.4, cure: 0.1, ether: 0.1, urgent: 0.6 }, // part max de l'or par famille
+    shopShares: { heal: 0.35, ball: 0.3, rareBall: 0.25, stone: 0.4, cure: 0.1, ether: 0.1, bait: 0.15, fossil: 0.5, urgent: 0.6 }, // part max de l'or par famille
     minBasket: 40,                // pas de trajet boutique pour moins de ₽40 d'achats (sauf urgence)
     // Améliorations
     upgradeStrategy: 'save',      // 'save' : épargne pour la plus rentable ; 'greedy' : la meilleure abordable tout de suite
@@ -137,10 +138,11 @@
     bossTraineeGain: 1.2,         // un "contre" de la Boîte entre en formation s'il ferait 20 % mieux au niveau du boss
 
     // Capture : chance exacte = (7 − (difficulté − bonus Ball)) / 6, difficulté 1–9 par espèce
-    catchNewPct: 90,              // nouvelle espèce : Ball la moins chère qui atteint 90 % (sinon la meilleure)
+    catchNewPct: 100,             // nouvelle espèce : Ball la moins chère qui atteint ce % (sinon la meilleure) — 100 = toujours la meilleure chance
     catchKnown: 'cheap',          // espèce déjà au Pokédex : 'free' (Sans Ball), 'cheap' (Ball la moins chère), 'normal' (catchMinPct)
     catchMinPct: 80,              // 'normal' : Ball la moins chère qui atteint ce %
     catchRarePct: 95,             // chromatique ou légendaire : la meilleure chance possible
+    catchTarget: '',              // espèce visée (nom affiché par le jeu) : le bot va dans la meilleure zone pour elle et la capture
     farmGoal: 'xp',
     dexFocus: 'catch',            // mode Pokédex : 'catch' (espèces sauvages jamais capturées) ou 'evo' (évolutions manquantes)
     // Activités (modes Versus / Raids) : le bot y va quand c'est ouvert, sinon il joue dans le mode de repli
@@ -153,7 +155,21 @@
     raidDaily: true,              // raid du jour
     raidLegendary: true,          // raids légendaires des zones terminées
     raidMaxTries: 8,              // essais par raid et par jour avant d'aller s'entraîner
-    raidAutoTeam: true,           // compose l'équipe de raid contre le boss à chaque raid               // mode Farm : 'xp' (zone choisie) ou 'gold' (zone qui rapporte le plus de ₽ par rencontre)
+    raidAutoTeam: true,           // compose l'équipe de raid contre le boss à chaque raid
+    raidFriends: true,            // ajoute au groupe les amis dont l'équipe de raid est la plus recommandée contre le boss
+    raidMinOdds: 0.6,             // dégâts estimés (toi + alliés) / PV totaux du boss : en dessous, on arrête après 2 essais…
+    raidTrain: true,              // …et on entraîne au Centre le meilleur « contre » du boss qui n'a pas le niveau plafond
+    // Événements et routines (tous modes)
+    eventWheel: true,             // Roue de la fortune : un tour gratuit par jour
+    rebattle: false,              // Revanche du Conseil 4 : enchaîne les paliers quand l'équipe est prête (5 combats sans Centre)
+    rebattleReadyScore: 1.4,      // ↳ duel moyen exigé contre les équipes du palier
+    rebattleMaxTries: 3,          // ↳ défaites par jour avant d'attendre le lendemain
+    dayCare: true,                // Pension : fait éclore les Œufs et y laisse un couple de la Boîte (Œufs : espèces absentes ×4)
+    dayCareCheckMin: 20,          // ↳ passe à la Pension au plus toutes les N minutes (sauf Œuf qui attend)
+    // Confort
+    notify: true,                 // notification du navigateur : chromatique, légendaire, boss, Œuf chromatique, bot arrêté
+    notifySound: true,            // ↳ petit son en plus
+    schedule: '',                 // planning : "08:00-23:00=pokedex; 23:00-08:00=farm" (vide = désactivé)               // mode Farm : 'xp' (zone choisie) ou 'gold' (zone qui rapporte le plus de ₽ par rencontre)
 
     // Performance (fin de jeu : Pokémon à 5-6 dés, grosse Boîte)
     exactEnumLimit: 1296,         // ≤ 6^4 issues → calcul exact ; au-delà, échantillonnage déterministe
@@ -280,6 +296,12 @@
       return n === 0 ? 0 : Math.min(Math.max(n, 0.5), 2);
     }
 
+    /**
+     * Port de cJ() : efficacité remplacée par une échelle propre au mode (raids : levels.typeScale).
+     * Sans échelle, l'efficacité est inchangée.
+     */
+    const scaleEff = (e, s) => (!s ? e : e === 0 ? s.immune : e > 1 ? s.super : e < 1 ? s.resisted : e);
+
     /** Port de Q4() : type de l'attaque = meilleur tuple (efficacité, nb de dés, STAB, valeur max). */
     function attackType(dice, attackerTypes, defTypes) {
       const count = new Map(), best = new Map();
@@ -331,7 +353,7 @@
      */
     function damage(dice, ctx) {
       const at = attackType(dice, ctx.attackerTypes, ctx.defTypes);
-      const r = at ? eff(at, ctx.defTypes) : 1;
+      const r = at ? scaleEff(eff(at, ctx.defTypes), ctx.levels?.typeScale) : 1;
       let sum = 0;
       const values = [];
       for (const d of dice) { const v = faceVal(d.face); values.push(v); sum += (v + dieBonus(d.type, ctx.levels)) * r; }
@@ -494,7 +516,7 @@
       return { score: (turnsToDie / turnsToKill) * speedEdge, aDmg, bDmg, turnsToKill, turnsToDie };
     }
 
-    return { speciesAt, eff, attackType, damage, statusesOf, utility, expectedUtility, chooseReroll, avgDamage, duelScore, combosIn, dieBonus, comboBonus, allLevels, faceVal, faceStatus, facesOf };
+    return { speciesAt, eff, scaleEff, attackType, damage, statusesOf, utility, expectedUtility, chooseReroll, avgDamage, duelScore, combosIn, dieBonus, comboBonus, allLevels, faceVal, faceStatus, facesOf };
   };
 
   /* Tout ce qui suit nécessite le navigateur. En Node, on n'expose que l'Engine. */
@@ -624,8 +646,20 @@
   }
   function monView(m, save) {
     const stats = Rt.E.speciesAt(m.dex, m.level);
-    return { id: m.id, dex: m.dex, name: Rt.nameOf(m.dex), level: m.level, hp: m.currentHp, stats, maxHp: stats?.maxHp ?? m.currentHp, levels: { comboLevels: save.comboLevels, dieLevels: save.dieLevels } };
+    return { id: m.id, dex: m.dex, name: Rt.nameOf(m.dex), level: m.level, hp: m.currentHp, stats, maxHp: stats?.maxHp ?? m.currentHp, levels: { comboLevels: save.comboLevels, dieLevels: save.dieLevels }, fossil: m.revivesAt != null };
   }
+  /**
+   * Espèces déjà obtenues : le Pokédex + les fossiles en train de revivre (instance avec `revivesAt`).
+   * Un fossile n'entre au Pokédex qu'à son réveil (24 h) : sans ça, le mode Pokédex attendrait dans la zone.
+   */
+  function obtainedDex(save = readSave()) {
+    const out = new Set(save?.pokedex ?? []);
+    const all = [save?.box ?? [], ...Object.values(save?.parked ?? {}).map((p) => p?.box ?? [])].flat();
+    for (const m of all) if (m?.revivesAt != null) out.add(m.dex);
+    return out;
+  }
+  /** Espèces qu'on peut rencontrer dans une zone (comme le jeu : poids > 0 — les fossiles de la zone ont un poids nul). */
+  const wildDexes = (area) => [...new Set((area?.wildPool ?? []).filter((w) => (w.weight ?? 1) > 0).map((w) => w.dex))].filter((d) => Rt.D.species[d]);
   const currentArea = (save = readSave()) => Rt.D.areas[save?.currentAreaId] ?? null;
   const enemyLevels = (area) => Rt.E.allLevels(area?.enemyUpgradeLevel ?? Rt.D.config.enemyUpgradeLevel ?? 1);
 
@@ -776,10 +810,11 @@
 
     const save = readSave();
     const area = currentArea(save);
-    const levels = { comboLevels: save?.comboLevels ?? {}, dieLevels: save?.dieLevels ?? {} };
-    const foeMax = foeStats?.maxHp ?? null;
+    // Raid : améliorations et échelles de type imposées par le raid ; chaque barre du boss vaut barHp × PV max
+    const levels = raid ? raidSideLevels() : { comboLevels: save?.comboLevels ?? {}, dieLevels: save?.dieLevels ?? {} };
+    const foeMax = foeStats?.maxHp ? Math.round(foeStats.maxHp * (raid ? raidCfg()?.barHp ?? 1 : 1)) : null;
     const foeHp = foeMax ? Math.max(1, Math.ceil(foeMax * foePct / 100)) : Infinity;
-    const foeExpDmg = foeStats && myStats ? Rt.E.avgDamage(foeStats.dice, { attackerTypes: foeStats.types, defTypes: myStats.types, levels: enemyLevels(area) }) : 0.15 * myMax;
+    const foeExpDmg = foeStats && myStats ? Rt.E.avgDamage(foeStats.dice, { attackerTypes: foeStats.types, defTypes: myStats.types, levels: raid ? raidBossLevels() : enemyLevels(area) }) : 0.15 * myMax;
     const myExpDmg = myStats ? Rt.E.avgDamage(myStats.dice, { attackerTypes: myStats.types, defTypes: foeTypes, levels }) : 5;
 
     return {
@@ -1316,9 +1351,9 @@
    */
   function missingSpecies(area, save = readSave(), focus = CONFIG.dexFocus) {
     if (!area) return [];
-    const caught = new Set(save?.pokedex ?? []);
+    const caught = obtainedDex(save);
     const region = area.regionId ?? regionId(save);
-    const wild = [...new Set((area.wildPool ?? []).map((w) => w.dex))].filter((d) => Rt.D.species[d]);
+    const wild = wildDexes(area);
     if (focus !== 'evo') return wild.filter((d) => !caught.has(d));
     const ownedReach = new Set();
     for (const m of [...teamMons(save), ...boxMons(save)]) { ownedReach.add(m.dex); for (const d of evoDescendants(m.dex, region)) if (d.level != null) ownedReach.add(d.toDex); }
@@ -1417,7 +1452,7 @@
     const threats = compactThreats(prepBoss ? [...areaThreats(area), ...bossThreats.map((b) => ({ ...b, weight: 8 }))] : areaThreats(area));
     const team = teamMons(save);
     // Boîte : seuls les meilleurs niveaux peuvent prétendre à une place → on borne le travail
-    const box = boxMons(save).filter((m) => m.stats).sort((a, b) => b.level - a.level).slice(0, CONFIG.centerMaxBox);
+    const box = boxMons(save).filter((m) => m.stats && !m.fossil).sort((a, b) => b.level - a.level).slice(0, CONFIG.centerMaxBox);
     const all = [];
     const t0 = performance.now();
     for (const m of [...team, ...box]) {
@@ -1506,7 +1541,7 @@
   /**
    * Choix de la Ball parmi les options affichées ({pct, price, bonus, master}) :
    *  - chromatique / légendaire : la meilleure chance, au prix le plus bas pour cette chance ;
-   *  - nouvelle espèce : la moins chère qui atteint catchNewPct (sinon la meilleure) ;
+   *  - nouvelle espèce : la moins chère qui atteint catchNewPct (100 % par défaut, sinon la meilleure) ;
    *  - espèce connue : selon catchKnown (Sans Ball / la moins chère / catchMinPct), jamais la meilleure Ball.
    */
   function chooseBall(opts, { legendary = false, rare = false, why = '' } = {}) {
@@ -1977,30 +2012,32 @@
     return tries.n[key];
   };
 
-  /** Types du boss du raid en cours (pour choisir les alliés PNJ). */
-  const raidBossTypes = () => { const r = mem.raid; const st = r?.dex ? Rt.E.speciesAt(r.dex, 50) : null; return st?.types ?? []; };
-  /** Équipe (noms) → nombre de Pokémon super efficaces contre le boss. */
-  const edgeVs = (dexes, bossTypes) => dexes.filter((d) => { const s = Rt.D.species[d]; return s && [s.type1, s.type2].filter(Boolean).some((t) => bossTypes.reduce((m, bt) => m * (Rt.D.chart[`${t}>${bt}`] ?? 1), 1) >= 2); }).length;
+  /**
+   * Niveaux d'amélioration en raid (port de bB) : le jeu n'utilise PAS les améliorations du joueur.
+   *  - chaque camp (toi et les alliés) attaque au niveau sideUpgradeLevel, avec l'échelle sideTypes
+   *    (super efficace ×1,3, pas très efficace ×0,5, immunité ×0) ;
+   *  - le boss attaque au niveau upgradeLevel, avec l'échelle bossTypes (×2 / ×0,7 / ×0,5).
+   * Avant la v1.5 le bot avait inversé les deux échelles : il surestimait l'attaque et ignorait la défense.
+   */
+  const RAID_SIDE = { super: 1.3, resisted: 0.5, immune: 0 }, RAID_BOSS = { super: 2, resisted: 0.7, immune: 0.5 };
+  function raidSideLevels() { const c = raidCfg() ?? {}; return { ...Rt.E.allLevels(c.sideUpgradeLevel ?? 5), typeScale: c.sideTypes ?? RAID_SIDE }; }
+  function raidBossLevels() { const c = raidCfg() ?? {}; return { ...Rt.E.allLevels(c.upgradeLevel ?? 8), typeScale: c.bossTypes ?? RAID_BOSS }; }
 
   /**
-   * Valeur d'un Pokémon en raid = dégâts infligés au boss avant d'être K.O.
-   * (dégâts par tour × tours de survie), avec les règles du raid : contre le boss, super efficace ×2,
-   * pas très efficace ×0,7, immunité ×0,5 ; le boss nous touche à ×1,3 / ×0,5 / ×0.
+   * Valeur d'un Pokémon en raid = dégâts moyens infligés au boss avant d'être K.O.
+   * (dégâts moyens par tour × tours de survie), au niveau plafond du raid et avec les règles ci-dessus.
+   * La défense pèse lourd : un boss super efficace frappe ×2, un boss résisté ×0,7 (ou ×0,5 si immunité).
    */
-  function raidValue(dex, level, bossDex, bossLevel, save = readSave()) {
-    const me = Rt.E.speciesAt(dex, level), boss = Rt.E.speciesAt(bossDex, bossLevel);
-    if (!me || !boss) return 0;
+  function raidValue(dex, level, bossDex, bossLevel) {
     const c = raidCfg() ?? {};
-    const bt = c.bossTypes ?? { super: 2, resisted: 0.7, immune: 0.5 }, sd = c.sideTypes ?? { super: 1.3, resisted: 0.5, immune: 0 };
-    const mult = (e, t) => (e === 0 ? t.immune : e >= 2 ? t.super : e < 1 ? t.resisted : 1);
-    const roll = (st, lv) => st.dice.reduce((n, t) => { const fs = Rt.E.facesOf(t); return n + fs.reduce((m, f) => m + Rt.E.faceVal(f), 0) / fs.length + Rt.E.dieBonus(t, lv); }, 0);
-    const bestEff = (st, def) => { const ts = [...new Set(st.dice.filter((t) => t !== 'base'))]; return ts.length ? Math.max(...ts.map((t) => Rt.E.eff(t, def.types))) : 1; };
-    const myLv = { comboLevels: save?.comboLevels ?? {}, dieLevels: save?.dieLevels ?? {} };
-    const bossLv = Rt.E.allLevels(c.upgradeLevel ?? 8);
-    const myDmg = roll(me, myLv) * mult(bestEff(me, boss), bt);
-    const bossDmg = Math.max(0.1, roll(boss, bossLv) * mult(bestEff(boss, me), sd));
+    const me = Rt.E.speciesAt(dex, Math.min(level, c.teamCap ?? level)), boss = Rt.E.speciesAt(bossDex, bossLevel);
+    if (!me || !boss) return 0;
+    const myDmg = Rt.E.avgDamage(me.dice, { attackerTypes: me.types, defTypes: boss.types, levels: raidSideLevels() });
+    const bossDmg = Math.max(0.1, Rt.E.avgDamage(boss.dice, { attackerTypes: boss.types, defTypes: me.types, levels: raidBossLevels() }));
     return myDmg * Math.ceil(me.maxHp / bossDmg);
   }
+  /** Valeur d'une équipe d'alliés PNJ : somme des valeurs de ses Pokémon (ils combattent l'un après l'autre). */
+  const raidTeamValue = (dexes, level, bossDex, bossLevel) => dexes.reduce((n, d) => n + raidValue(d, level, bossDex, bossLevel), 0);
 
   /**
    * Équipe de raid : à chaque raid, le bot ouvre "Modifier" et choisit les 3 Pokémon qui infligeront le plus de
@@ -2073,14 +2110,15 @@
     if (cards.length) {
       const startBtn = btn('ui.raid.npcStart');
       if (startBtn) { log('🤝 Raid : alliés choisis, c\'est parti'); startBtn.click(); return true; }
-      const bossTypes = raidBossTypes();
+      const bossLevel = r.bossLevel ?? raidCfg()?.level ?? 50;
       const scored = cards.filter((x) => x.getAttribute('aria-pressed') !== 'true').map((x) => {
         const label = x.getAttribute('aria-label');
+        const level = +(label.match(/N\.\s*(\d+)\s*$/)?.[1] ?? label.match(/(\d+)\s*$/)?.[1] ?? bossLevel);
         const teamTxt = label.split(':').slice(1).join(':').replace(/,\s*N\.\s*\d+.*$/, '');
         const dexes = teamTxt.split(',').map((n) => Rt.dexOf(n.trim())).filter(Boolean);
-        return { x, s: edgeVs(dexes, bossTypes) };
+        return { x, name: label.split(':')[0].trim(), s: r.dex ? raidTeamValue(dexes, level, r.dex, bossLevel) : dexes.length };
       }).sort((a, b) => b.s - a.s);
-      if (scored[0]) { scored[0].x.click(); return true; }
+      if (scored[0]) { log(`🤝 Raid : allié ${scored[0].name} (≈ ${Math.round(scored[0].s)} dégâts au boss)`); scored[0].x.click(); return true; }
     }
     // Résultats
     if (btn('ui.raid.again') && (bodyHas('ui.raid.result.lostTitle') || bodyHas('ui.raid.result.fledTitle'))) {
@@ -2308,12 +2346,12 @@
    */
   function ballPlan(save) {
     const tiers = shopTiers('ball', 'bonus', save);
-    const caught = new Set(save?.pokedex ?? []);
+    const caught = obtainedDex(save);
     const areas = [...new Set([currentArea(save), desiredArea(save), CONFIG.mode === 'progression' ? nextAreaFor(save) : null].filter(Boolean))];
     const want = {}, species = [], seen = new Set();
     for (const a of areas) {
-      for (const dex of (a.wildPool ?? []).map((w) => w.dex)) {
-        if (caught.has(dex) || seen.has(dex) || !Rt.D.species[dex]) continue;
+      for (const dex of wildDexes(a)) {
+        if (caught.has(dex) || seen.has(dex)) continue;
         seen.add(dex);
         const need = catchNeed(dex);
         const b = ballFor(need, CONFIG.catchNewPct, tiers);
