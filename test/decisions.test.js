@@ -1025,3 +1025,82 @@ test('Pokédex : évolutions — pierres : capture de la base, farm ₽ si l’o
     assert.ok(P.missingSpecies(P.Rt.D.areas.forest, save, 'evo').includes(25), 'Pikachu à capturer pour Raichu (pierre)');
   } finally { delete P.Rt.D.areas.forest.encounterWeights; P.mem.goldArea = null; P.setMode('progression', { persist: false }); }
 });
+
+/* ── v1.9 : Revanche (équipe pour tout le palier), régions, partenaire ── */
+test('Revanche : l’équipe couvre tout le palier (chaque Pokémon adverse a une réponse)', () => {
+  P.setMode('progression', { persist: false });
+  setup({ box: [['a', 999, 50]], team: ['a'], pokedex: [999] });
+  addMon(7601, 'Eau', 'water', 300); addMon(7602, 'Plante', 'grass', 300); addMon(7603, 'Feu', 'fire', 300); addMon(7604, 'Normal1', 'normal', 300); addMon(7605, 'Normal2', 'normal', 300);
+  addMon(7611, 'FeuAdv', 'fire', 300); addMon(7612, 'EauAdv', 'water', 300); addMon(7613, 'PlanteAdv', 'grass', 300);
+  const mon = (dex) => { const st = P.Rt.E.speciesAt(dex, 50); return { id: 'm' + dex, dex, name: String(dex), level: 50, stats: st, maxHp: st.maxHp, levels: P.Rt.E.allLevels(3) }; };
+  const cands = [7601, 7602, 7603, 7604, 7605].map(mon);
+  const threats = [7611, 7612, 7613].map((dex) => ({ dex, level: 50, levels: P.Rt.E.allLevels(3) }));
+  const best = P.bestTeamVs(cands, threats);
+  assert.equal(best.team.length, 3);
+  assert.deepEqual(best.team.map((m) => m.dex).sort(), [7601, 7602, 7603], 'Eau + Plante + Feu : une réponse à chaque type adverse');
+  assert.ok(best.worst > 0);
+});
+
+test('Régions : nouvelle région ouverte après la Ligue, changement selon le mode', () => {
+  const save = setup({ box: [['a', 999, 60]], team: ['a'], pokedex: [999, 10, 16, 25, 104], area: 'route1' });
+  P.Rt.D.regions.kanto = { ...P.Rt.D.regions.kanto, leagueAreaId: 'cave', nextRegion: 'johto', starters: [1, 4, 7], orderIndex: 0 };
+  P.Rt.D.regions.johto = { id: 'johto', name: 'Johto', orderIndex: 1, dexRange: [152, 251], starters: [152, 155, 158], enabled: true };
+  for (const [dex, name, hp] of [[152, 'Germignon', 200], [155, 'Héricendre', 300], [158, 'Kaiminus', 250]]) addMon(dex, name, 'normal', hp);
+  P.setOption('rebattle', false, { persist: false });
+  try {
+    assert.equal(P.newRegionOpen(save), null, 'Ligue pas encore battue');
+    save.areaProgress.cave = { cleared: true };
+    assert.equal(P.newRegionOpen(save)?.id, 'johto');
+    P.setMode('progression', { persist: false });
+    assert.equal(P.regionSwitchDue(save)?.id, 'johto', 'Progression : on y va');
+    P.setMode('pokedex', { persist: false });
+    localStorage.removeItem('pokebot.dexStall');
+    save.areaProgress.forest = {};
+    save.pokedex = save.pokedex.filter((d) => d !== 25);
+    assert.equal(P.regionSwitchDue(save), null, 'Pokédex : captures — Pikachu manque encore en forêt : on reste');
+    save.pokedex.push(25);
+    assert.equal(P.regionSwitchDue(save)?.id, 'johto', 'Pokédex : captures — plus rien à capturer : on change de région');
+    P.setMode('pokedexEvo', { persist: false });
+    assert.equal(P.regionSwitchDue(save), null, 'Pokédex : évolutions — pas de changement automatique');
+  } finally { P.setMode('progression', { persist: false }); }
+});
+
+test('Régions : partenaire choisi dans les réglages, sinon le meilleur potentiel', () => {
+  setup({ box: [['a', 999, 60]], team: ['a'], pokedex: [999] });
+  P.Rt.D.regions.johto = { id: 'johto', name: 'Johto', orderIndex: 1, dexRange: [152, 251], starters: [152, 155, 158], enabled: true };
+  for (const [dex, name, hp] of [[152, 'Germignon', 200], [155, 'Héricendre', 300], [158, 'Kaiminus', 250]]) addMon(dex, name, 'normal', hp);
+  P.setOption('starterPick.johto', '', { persist: false });
+  assert.equal(P.starterFor('johto'), 155, 'automatique : le meilleur potentiel (Héricendre, 300 PV)');
+  P.setOption('starterPick.johto', 158, { persist: false });
+  assert.equal(P.starterFor('johto'), 158, 'réglage : Kaiminus');
+  P.setOption('starterPick.johto', '', { persist: false });
+});
+
+test('Régions : écran du partenaire — la bonne Poké Ball, Choisir, puis C’est parti', async () => {
+  setup({ box: [['a', 999, 60]], team: ['a'], pokedex: [999] });
+  P.Rt.D.regions.johto = { id: 'johto', name: 'Johto', orderIndex: 1, dexRange: [152, 251], starters: [152, 155, 158], enabled: true };
+  for (const [dex, name] of [[152, 'Germignon'], [155, 'Héricendre'], [158, 'Kaiminus']]) { addMon(dex, name, 'normal', 250); P.Rt.frNameToDex.set(name.toUpperCase(), dex); }
+  for (const [k, v] of [['ui.partner.label', 'Choisis ton partenaire à {region}'], ['ui.partner.ball', 'Poké Ball {n} sur 3'], ['ui.partner.out', '{name}, sorti de sa Poké Ball'], ['ui.partner.yes', 'Choisir {name}'], ['ui.partner.no', 'Pas celui-ci'], ['ui.partner.go', 'C’est parti !']]) P.Rt.i18n.set(k, v);
+  P.setOption('starterPick.johto', 158, { persist: false });
+  const balls = [1, 2, 3].map((n) => fakeEl({ attrs: { 'aria-label': `Poké Ball ${n} sur 3` } }));
+  const dlg = fakeEl({ attrs: { 'aria-label': 'Choisis ton partenaire à Johto', role: 'dialog' } });
+  dlg.querySelectorAll = (sel) => (sel === 'button[aria-label]' ? balls : sel.startsWith('button') ? buttons : []);
+  let buttons = [...balls];
+  dlg.querySelector = () => null;
+  const before = document.querySelectorAll;
+  document.querySelectorAll = (sel) => (sel === '[role=dialog]' ? [dlg] : sel.startsWith('button') ? buttons : []);
+  P.mem.regionGo = P.Rt.D.regions.johto;
+  try {
+    assert.ok(await P.playPartner(dlg));
+    assert.equal(balls[2].clicks, 1, 'Poké Ball 3 = Kaiminus (3e starter)');
+    const yes = fakeEl({ innerText: 'Choisir Kaiminus' });
+    buttons = [yes]; document.body.innerText = 'Tu veux choisir Kaiminus ?\nChoisir Kaiminus';
+    assert.ok(await P.playPartner(dlg));
+    assert.equal(yes.clicks, 1, 'Kaiminus confirmé');
+    const go = fakeEl({ innerText: 'C’est parti !' });
+    buttons = [go];
+    assert.ok(await P.playPartner(dlg));
+    assert.equal(go.clicks, 1);
+    assert.equal(P.mem.regionGo, null, 'changement de région terminé');
+  } finally { document.querySelectorAll = before; document.body.innerText = ''; P.Rt.i18n.clear(); P.Rt.frNameToDex.clear(); P.setOption('starterPick.johto', '', { persist: false }); P.mem.regionGo = null; }
+});

@@ -38,11 +38,15 @@ Dans tous les modes, une **espèce visée** (onglet Captures) emmène le bot dan
 
 Le jeu partage l'XP (Multi Exp) : un Pokémon de l'équipe qui ne combat pas reçoit 30 % de l'XP, plus 5 % par niveau d'écart avec le combattant. Au moins 14 niveaux plus bas, il reçoit donc 100 %. Au Centre, le Pokémon le plus fort **porte** l'équipe et les autres places vont à des **élèves** de la Boîte, choisis dans cet ordre : évolution qui manque au Pokédex, Versus (N.50), contre d'un raid perdu, meilleur potentiel. Le meneur est choisi pour l'XP utile : plus d'XP perdue sur des Pokémon au niveau 100.
 
+### Régions
+
+Une fois la Ligue battue, le bot passe à la région suivante (Progression, Farm, et Pokédex : captures quand la région n'a plus d'espèce à capturer). Il choisit le partenaire réglé pour chaque région dans l'onglet « Équipe & zones » (par défaut, le meilleur potentiel).
+
 ### Routines (tous modes)
 
 - **Roue de la fortune** : le tour gratuit du jour.
 - **Pension** : fait éclore les Œufs (l'espèce est tirée au hasard, 4× plus souvent parmi celles qui manquent au Pokédex) et y dépose un couple compatible de la Boîte, choisi parmi les plus bas niveaux.
-- **Revanche du Conseil 4** (désactivée par défaut) : enchaîne les paliers quand l'équipe est prête, s'arrête après N défaites par jour.
+- **Revanche du Conseil 4** : le Centre compose l'équipe qui bat tout le palier (5 combats sans Centre ni changement d'équipe), puis le bot enchaîne les combats ; il s'arrête après N défaites par jour.
 
 ### Confort
 
