@@ -862,3 +862,73 @@ test('Raids : raid choisi, raid du jour d’abord, en boucle sans plafond d’es
     assert.equal(P.nextRaid(save).key, 'daily', 'en boucle : on continue');
   } finally { P.setOption('raidLoop', false, { persist: false }); P.setOption('raidTarget', '', { persist: false }); localStorage.removeItem('pokebot.activity'); delete P.Rt.D.config.events; }
 });
+
+/** Petit faux DOM : éléments cliquables visibles, recherche par sélecteur simulée. */
+const fakeEl = (props = {}) => Object.assign({ getClientRects: () => [1], getAttribute(k) { return this.attrs?.[k] ?? null; }, dataset: {}, querySelector: () => null, querySelectorAll: () => [], innerText: '', textContent: '', clicks: 0, click() { this.clicks++; } }, props);
+function withScreen({ sections = [], buttons = [], radios = [], body = '' }, fn) {
+  const before = document.querySelectorAll, beforeText = document.body.innerText;
+  document.querySelectorAll = (sel) => (sel === 'section[aria-label]' ? sections : sel === 'button, a[role=button]' || sel === 'button' ? buttons : sel === 'button, [role=radio]' ? [...buttons, ...radios] : []);
+  document.body.innerText = body;
+  return Promise.resolve(fn()).finally(() => { document.querySelectorAll = before; document.body.innerText = beforeText; });
+}
+
+test('Raid : « Raid perdu » avec le combat encore affiché derrière → Réessayer (plus de blocage)', async () => {
+  P.setMode('raid', { persist: false });
+  setup({ box: [['a', 999, 50]], team: ['a'], pokedex: [999] });
+  for (const [k, v] of [['ui.raid.heading', 'Raid : {name}'], ['ui.battle.heading', 'Combat : {a} contre {b}'], ['ui.raid.again', 'Réessayer'], ['ui.raid.result.lostTitle', 'Raid perdu'], ['ui.raid.back', 'Retour aux raids'], ['ui.common.back', 'Retour']]) P.Rt.i18n.set(k, v);
+  const again = fakeEl({ innerText: 'Réessayer' }), back = fakeEl({ innerText: 'Retour', attrs: { 'aria-label': 'Retour aux raids' } });
+  const section = fakeEl({ attrs: { 'aria-label': 'Raid : Mewtwo' } });
+  P.mem.raid = { key: 'cave/26', dex: 26, idle: 0 };
+  localStorage.removeItem('pokebot.activity');
+  try {
+    await withScreen({ sections: [section], buttons: [back, again], body: 'Raid : Mewtwo\nRaid perdu\nMewtwo était trop fort cette fois.\nRetour\nRéessayer' }, async () => {
+      assert.ok(P.readBattle()?.raid, 'la section du combat est bien encore là');
+      assert.ok(await P.playRaidPage());
+    });
+    assert.equal(again.clicks, 1, 'Réessayer cliqué');
+    assert.equal(back.clicks, 0);
+  } finally { P.Rt.i18n.clear(); P.mem.raid = null; localStorage.removeItem('pokebot.activity'); P.setMode('progression', { persist: false }); }
+});
+
+test('Raid : le boss se capture avec la meilleure chance, Master Ball comprise, même déjà au Pokédex', async () => {
+  P.setMode('raid', { persist: false });
+  setup({ box: [['a', 999, 50]], team: ['a'], pokedex: [999, 26] });
+  for (const [k, v] of [['ui.raid.heading', 'Raid : {name}'], ['ui.catch.ballLabel', '{label}{left} : {pct} % de chance{useless}'], ['ui.catch.roll', 'LANCER POUR CAPTURER'], ['ui.raid.log.won', '{boss} est épuisé ! Lance une Ball !']]) P.Rt.i18n.set(k, v);
+  P.Rt.D.items['poke-ball'].name = 'Poké Ball'; P.Rt.D.items['ultra-ball'].name = 'Hyper Ball'; P.Rt.D.items['master-ball'].name = 'Master Ball';
+  P.Rt.frNameToDex.set('RAICHU', 26);
+  const radio = (label) => fakeEl({ attrs: { 'aria-label': label, role: 'radio', 'aria-checked': 'false' } });
+  const poke = radio('Poké Ball, 9 restantes : 17 % de chance'), hyper = radio('Hyper Ball, 3 restantes : 50 % de chance'), master = radio('Master Ball, 1 restantes : 100 % de chance');
+  const roll = fakeEl({ innerText: 'LANCER POUR CAPTURER' });
+  P.mem.rare = null; P.mem.fightKind = null; P.mem.raid = { key: 'cave/26', dex: 26 };
+  const section = fakeEl({ attrs: { 'aria-label': 'Raid : Raichu' } });
+  try {
+    await withScreen({ sections: [section], buttons: [roll], radios: [poke, hyper, master], body: 'Raichu est épuisé ! Lance une Ball !' }, () => P.playCatch());
+    assert.equal(master.clicks, 1, 'Master Ball choisie (rien d’autre n’atteint 100 %)');
+    assert.equal(poke.clicks, 0, 'jamais la Poké Ball sur un boss de raid');
+    assert.equal(roll.clicks, 1);
+    assert.equal(P.mem.rare?.why, 'raid');
+  } finally { P.Rt.i18n.clear(); P.Rt.frNameToDex.clear(); P.mem.raid = null; P.mem.rare = null; P.mem.throwPending = null; P.setMode('progression', { persist: false }); }
+});
+
+test('Capture : toutes les options de Ball sont reconnues, pas seulement les « inutiles » (paramètre vide)', async () => {
+  P.setMode('pokedex', { persist: false });
+  setup({ box: [['a', 16, 10]], team: ['a'], pokedex: [16] });
+  for (const [k, v] of [['ui.catch.ballLabel', '{label}{left} : {pct} % de chance{useless}'], ['ui.catch.roll', 'LANCER POUR CAPTURER'], ['ui.catch.wornOut', '{who} {name} est épuisé !']]) P.Rt.i18n.set(k, v);
+  const re = P.Rt.re('ui.catch.ballLabel');
+  assert.ok(re.test('SANS BALL : 33 % DE CHANCE'), 'Sans Ball (ni {left} ni {useless})');
+  assert.ok(re.test('HYPER BALL, 3 RESTANTES : 67 % DE CHANCE'), 'option normale ({useless} vide) — non reconnue avant la v1.7.4');
+  assert.ok(re.test('HYPER BALL, 3 RESTANTES : 100 % DE CHANCE, INUTILE'), 'option inutile');
+  // Écran complet : nouvelle espèce difficile → la meilleure Ball (et non la sélection par défaut « Sans Ball »)
+  P.Rt.D.items['poke-ball'].name = 'Poké Ball'; P.Rt.D.items['ultra-ball'].name = 'Hyper Ball';
+  P.Rt.frNameToDex.set('PIKACHU', 25);
+  const radio = (label) => fakeEl({ attrs: { 'aria-label': label, role: 'radio', 'aria-checked': 'false' } });
+  const none = radio('Sans Ball : 33 % de chance'), poke = radio('Poké Ball, 9 restantes : 50 % de chance'), hyper = radio('Hyper Ball, 2 restantes : 83 % de chance');
+  const roll = fakeEl({ innerText: 'LANCER POUR CAPTURER' });
+  P.mem.rare = null; P.mem.fightKind = 'wild'; P.mem.raid = null;
+  try {
+    await withScreen({ buttons: [roll], radios: [none, poke, hyper], body: 'Le Pikachu est épuisé !' }, () => P.playCatch());
+    assert.equal(hyper.clicks, 1, 'Hyper Ball cliquée');
+    assert.equal(roll.clicks, 1);
+    assert.equal(P.mem.rare?.why, 'nouvelle espèce');
+  } finally { P.Rt.i18n.clear(); P.Rt.frNameToDex.clear(); P.mem.rare = null; P.mem.fightKind = null; P.mem.throwPending = null; P.setMode('progression', { persist: false }); }
+});
