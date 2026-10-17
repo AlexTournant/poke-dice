@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pokédice Autopilot
 // @namespace    pokedice-bot
-// @version      1.11.3
+// @version      1.11.4
 // @description  Joue à Pokédice — modes Progression / Pokédex / Farm / Versus / Raids : combats optimisés, soins, captures, boutique, améliorations, Centre, zones.
 // @match        https://poke-dice.netlify.app/*
 // @grant        none
@@ -176,7 +176,8 @@
     eventWheel: true,             // Roue de la fortune : un tour gratuit par jour
     rebattle: true,               // Revanche du Conseil 4 : le Centre compose l'équipe qui bat tout le palier, puis enchaîne les 5 combats
     rebattleReadyScore: 1.4,      // ↳ (ancien critère, remplacé par la simulation de la série)
-    rebattleHpMargin: 0.15,       // ↳ la série simulée doit être gagnée avec au moins 15 % des PV de l'équipe restants
+    rebattleHpMargin: 0.15,       // ↳ la série simulée doit être gagnée avec au moins 15 % des PV de l'équipe restants…
+    rebattleTryPct: 0.8,          // ↳ …ou, en mode Revanche, battre au moins 80 % des adversaires (simulation sans potions ni relances)
     rebattleMaxTries: 3,          // ↳ défaites par jour avant d'attendre le lendemain
     dayCare: true,                // Pension : fait éclore les Œufs et y laisse un couple de la Boîte (Œufs : espèces absentes ×4)
     dayCareCheckMin: 20,          // ↳ passe à la Pension au plus toutes les N minutes (sauf Œuf qui attend)
@@ -742,7 +743,8 @@
     if (!area) return [];
     const out = [];
     for (const tr of gymTrainers(area)) for (const m of tr.team ?? []) out.push({ dex: m.dex, level: m.level ?? area.maxLevel ?? 5, trainer: tr.name, upgradeLevel: tr.upgradeLevel });
-    for (const b of area.legendaryBoss ?? []) out.push({ dex: b.dex, level: b.level ?? area.maxLevel ?? 5, trainer: 'légendaire' });
+    // Les légendaires « raid » ne se combattent pas dans la zone (jeu : as() les exclut) — ce ne sont pas des boss
+    for (const b of area.legendaryBoss ?? []) if (!b.raid) out.push({ dex: b.dex, level: b.level ?? area.maxLevel ?? 5, trainer: 'légendaire' });
     return out.filter((x) => Rt.D.species[x.dex]);
   }
 
@@ -1336,7 +1338,11 @@
   function bossPending(area, save = readSave()) {
     if (!area || !bossTeam(area).length) return false;
     const p = save?.areaProgress?.[area.id];
-    return !!p && !p.bossDefeated && (p.roundsDone ?? 0) >= (area.roundsToClear ?? 0) && (p.gymsDefeated?.length ?? 0) < gymTrainers(area).length + (area.legendaryBoss?.length ? 1 : 0);
+    if (!p || p.bossDefeated || (p.roundsDone ?? 0) < (area.roundsToClear ?? 0)) return false;
+    // Arène(s) pas toutes battues, ou légendaire de zone (pas de raid) pas encore battu
+    const gymsLeft = (p.gymsDefeated?.length ?? 0) < gymTrainers(area).length;
+    const legendLeft = (area.legendaryBoss ?? []).some((b) => !b.raid && !(p.bossesDefeated ?? []).includes(b.dex));
+    return gymsLeft || legendLeft;
   }
   function nextAreaFor(save = readSave()) {
     const prog = save?.areaProgress ?? {};
@@ -1848,7 +1854,7 @@
     }
 
     // Revanche du Conseil 4 prête : l'équipe qui bat TOUT le palier (pas de Centre ni de changement d'équipe pendant)
-    const rbp = !prepBoss ? rebattlePlan(save) : null;
+    const rbp = CONFIG.activity === 'rebattle' || !prepBoss ? rebattlePlan(save) : null;
     if (rbp) {
       want.splice(0, want.length, ...rbp.team);
       mem.xpTrainees = []; mem.trainee = null;
@@ -2791,10 +2797,11 @@
         return false;
       }
       // On ne lance que si la série simulée est gagnée : sinon l'équipe s'entraîne dans le mode de repli
-      if (!plan || !plan.ready) {
+      if (!plan || !plan.worthTrying) {
         actLog('rb', `🏅 Revanche ${rb.tier.id} : pas encore gagnable${plan ? ` — meilleure équipe ${plan.team.map((m) => `${m.name} N.${m.level}`).join(' + ')} bat ${plan.beaten}/${plan.total} adversaires en simulation${plan.stuckOn ? ', bloquée sur ' + plan.stuckOn : ''}` : ''} → entraînement en ${fb}`);
         return false;
       }
+      if (!plan.ready) actLog('rbw', `🏅 Revanche ${rb.tier.id} : la simulation (sans potions ni relances) bat ${plan.beaten}/${plan.total} adversaires — on tente avec ${plan.team.map((m) => m.name).join(' + ')}`);
     }
     mem.errand = 'rebattle'; mem.errandAt = Date.now();
     log(`🏅 Revanche du Conseil 4 : palier ${rb.tier.id}${rb.step ? `, combat ${rb.step + 1}` : ''} — on y va`);
@@ -3891,9 +3898,11 @@
     if (!plan) return null;
     // Prête = la série simulée est gagnée avec une marge de PV (les soins et la chance des dés ne sont pas comptés)
     const ready = plan.wins && plan.hpLeft >= CONFIG.rebattleHpMargin;
+    // Mode dédié : on tente aussi quand la simulation (pessimiste : sans potions ni relances) bat la plupart des adversaires
+    const worthTrying = ready || (dedicated && plan.beaten / (plan.total || 1) >= CONFIG.rebattleTryPct);
     // Mode dédié : l'équipe se compose même avant d'être prête (elle s'entraîne ensemble) ; sinon seulement prête
     if (!dedicated && !ready) return null;
-    return { rb, ...plan, avg: plan.hpLeft, worst: plan.beaten / (plan.total || 1), ready };
+    return { rb, ...plan, avg: plan.hpLeft, worst: plan.beaten / (plan.total || 1), ready, worthTrying };
   }
 
   /* Régions */
@@ -4371,6 +4380,7 @@
         { p: 'dayCare', t: 'bool', l: 'Pension : faire éclore les Œufs et déposer un couple' },
         { p: 'dayCareCheckMin', t: 'num', l: '↳ y passer au plus toutes les N min', min: 5, max: 600, step: 5 },
         { p: 'rebattle', t: 'bool', l: 'Revanche du Conseil 4 quand l’équipe est prête' },
+        { p: 'rebattleTryPct', t: 'pct', l: '↳ mode Revanche : tenter si la simulation bat au moins (% des adversaires)', h: 'La simulation ne compte ni les potions ni les relances : elle est pessimiste. Défaites limitées par jour (réglage ci-dessus).' },
         { p: 'rebattleHpMargin', t: 'pct', l: '↳ lancée si la série simulée est gagnée avec au moins (% des PV)', h: 'Le bot simule les 5 combats d’affilée (PV qui ne remontent pas, meilleur Pokémon envoyé contre chaque adversaire). Soins et chance des dés non comptés.' },
         { p: 'rebattleMaxTries', t: 'num', l: '↳ défaites max par jour', min: 1, max: 20 },
       ] },

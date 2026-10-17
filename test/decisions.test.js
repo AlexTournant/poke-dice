@@ -1339,3 +1339,31 @@ test('Régions : retour dans une région déjà jouée — Revanche à Kanto dep
     assert.equal(P.playedRegionTarget(save)?.id, 'johto', 'Progression : retour à la région pas finie');
   } finally { P.mem.regionGo = null; P.Rt.i18n.clear(); P.Rt.D.areaList.pop(); delete P.Rt.D.areas.j29; delete P.Rt.D.config.events; delete P.Rt.D.config.rebattleLineups; P.setMode('progression', { persist: false }); }
 });
+
+test('Boss : un légendaire de raid (Mewtwo à la Caverne Azurée) n’est pas un boss de zone en attente', () => {
+  const save = setup({ box: [['a', 999, 60]], team: ['a'], pokedex: [999] });
+  const cave = P.Rt.D.areas.cave; // legendaryBoss: Raichu, raid: true
+  save.areaProgress.cave = { cleared: true, roundsDone: 9, gymsDefeated: [], bossesDefeated: [] };
+  assert.equal(P.bossTeam(cave).length, 0, 'pas d’équipe de boss : c’est un raid');
+  assert.equal(P.bossPending ? P.bossPending(cave, save) : false, false, 'rien en attente');
+});
+
+test('Mode Revanche : on tente quand la simulation bat la plupart des adversaires', () => {
+  const save = setup({ box: [['a', 999, 60]], team: ['a'], pokedex: [999] });
+  P.Rt.D.regions.kanto.leagueAreaId = 'route1';
+  addMon(7801, 'Coriace', 'normal', 5000);
+  P.Rt.D.trainers = { e1: { id: 'e1', name: 'Olga', team: [{ dex: 16, level: 20 }, { dex: 16, level: 20 }] }, e2: { id: 'e2', name: 'Peter', team: [{ dex: 16, level: 20 }, { dex: 7801, level: 99 }] } };
+  P.Rt.D.config.rebattleLineups = { kanto: { bronze: ['e1', 'e2'] } };
+  P.Rt.D.config.events = { rebattle: { access: 'all', tiers: [{ id: 'bronze', gold: 1, upgradeDelta: 1 }] } };
+  P.setMode('rebattle', { persist: false });
+  P.mem.rbPlan = null;
+  try {
+    let plan = P.rebattlePlan(save);
+    assert.ok(!plan.ready, 'série pas gagnée en simulation');
+    assert.equal(plan.beaten, 3, '3 adversaires sur 4 battus');
+    P.setOption('rebattleTryPct', 0.7, { persist: false }); P.mem.rbPlan = null;
+    assert.ok(P.rebattlePlan(save).worthTrying, '75 % ≥ 70 % : on tente');
+    P.setOption('rebattleTryPct', 0.8, { persist: false }); P.mem.rbPlan = null;
+    assert.ok(!P.rebattlePlan(save).worthTrying, '75 % < 80 % : on s’entraîne');
+  } finally { P.setOption('rebattleTryPct', 0.8, { persist: false }); delete P.Rt.D.config.events; delete P.Rt.D.config.rebattleLineups; delete P.Rt.D.regions.kanto.leagueAreaId; P.setMode('progression', { persist: false }); }
+});

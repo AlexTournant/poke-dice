@@ -6,6 +6,18 @@ Chaque section `## [X.Y.Z]` correspond à un tag `vX.Y.Z`. Les notes de la relea
 
 ## [Non publié]
 
+## [1.11.4]
+
+### Corrigé
+
+- Revanche du Conseil 4 : en mode Revanche, le bot ne lançait jamais la série.
+  - Mewtwo (légendaire de **raid** de la Caverne Azurée) était compté comme un boss de zone pas encore battu. Le Centre préparait alors l'équipe de ce « boss » au lieu de l'équipe de la revanche. Les légendaires de raid ne sont plus des boss de zone (comme dans le jeu), et en mode Revanche l'équipe de la revanche passe en priorité.
+  - La série devait être gagnée en simulation avec 15 % des PV restants. La simulation ne compte ni les potions ni les relances : elle est pessimiste, et la condition n'était presque jamais remplie.
+
+### Ajouté
+
+- Réglage « mode Revanche : tenter si la simulation bat au moins (% des adversaires) » (`rebattleTryPct`, 80 % par défaut). En mode Revanche, le bot lance la série avec l'équipe qui bat le plus d'adversaires d'affilée dès que ce seuil est atteint. Le journal l'indique : « 🏅 Revanche bronze : la simulation … bat 13/15 adversaires — on tente avec … ».
+
 ## [1.11.3]
 
 ### Corrigé
