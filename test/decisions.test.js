@@ -1266,3 +1266,24 @@ test('Régions : écran « Tu veux choisir Germignon ? » (DOM réel du joueur) 
     assert.equal(yes.clicks, 1);
   } finally { document.querySelectorAll = before; document.body.innerText = ''; P.Rt.i18n.clear(); P.Rt.frNameToDex.clear(); P.setOption('starterPick.johto', '', { persist: false }); }
 });
+
+test('Régions : depuis Johto, les raids et événements débloqués à Kanto restent visibles (sauvegarde rangée par région)', () => {
+  const save = setup({ box: [['a', 999, 60]], team: ['a'], pokedex: [999] });
+  P.Rt.D.areas.cave.regionId = 'kanto'; P.Rt.D.areas.forest.regionId = 'kanto';
+  P.Rt.D.areas.j29 = { id: 'j29', name: 'Route 29', regionId: 'johto', orderIndex: 100, wildPool: [] };
+  P.Rt.D.areaList.push(P.Rt.D.areas.j29);
+  P.Rt.D.config.events = { raid: { access: 'all', unlockAreaId: 'forest' }, wheel: { access: 'all', unlockAreaId: 'forest' } };
+  // On joue à Johto : la sauvegarde de Kanto est rangée dans parked.kanto
+  save.region = 'johto'; save.currentAreaId = 'j29'; save.areaProgress = { j29: {} }; save.pokedex = [152];
+  save.parked = { kanto: { areaProgress: { forest: { cleared: true }, cave: { cleared: true, bossesDefeated: [] } }, pokedex: [999, 10, 16] } };
+  localStorage.removeItem('pokebot.activity');
+  try {
+    assert.ok(P.eventOpen('raid', save), 'raid du jour débloqué par une zone de Kanto');
+    assert.ok(P.eventOpen('wheel', save), 'roue aussi');
+    assert.equal(P.raidStatus(save, P.Rt.D.areas.cave, { dex: 26 }), 'open', 'Raichu (grotte de Kanto) ouvert, vu depuis Johto');
+    const raids = P.openRaids(save).map((r) => r.key);
+    assert.ok(raids.includes('daily') && raids.includes('cave/26'), 'raid du jour + raid légendaire de Kanto : ' + raids);
+    save.parked.kanto.pokedex.push(26);
+    assert.ok(P.legendaryRaids(save, { all: true })[0].caught, 'Pokédex de Kanto (pas celui de Johto) pour savoir si l’espèce est déjà vue');
+  } finally { delete P.Rt.D.config.events; P.Rt.D.areaList.pop(); delete P.Rt.D.areas.j29; }
+});

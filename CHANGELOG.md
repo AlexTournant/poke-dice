@@ -10,6 +10,11 @@ Chaque section `## [X.Y.Z]` correspond à un tag `vX.Y.Z`. Les notes de la relea
 
 ### Corrigé
 
+- Régions : chaque région a sa propre sauvegarde (progression, Pokédex, Boîte), et celle des régions où l'on ne joue pas est rangée à part (`save.parked`). Le bot ne lisait que la région courante. Depuis Johto :
+  - les raids légendaires de Kanto (par exemple Électhor, « Ouvert ») étaient invisibles ;
+  - le raid du jour, la Roue de la fortune et la Pension, débloqués par une zone de Kanto, semblaient fermés.
+  Le bot lit maintenant la bonne région, comme la page des raids (onglets Kanto / Johto). Un raid d'une autre région se lance d'ici, et l'espèce est cherchée dans le Pokédex de sa région.
+- Raid du jour : il était exigé un ancien champ `enabled` ; le jeu se base sur `access: "all"`.
 - Choix du partenaire : la région se reconnaît par le nom en fin de titre (« … à Johto »), en ignorant les régions sans nom. À défaut, le bot prend la nouvelle région ouverte. Avant, une région sans nom dans les données « correspondait » à tous les titres, et le bot acceptait alors le premier starter proposé.
 
 ## [1.11.1]

@@ -690,6 +690,17 @@
   /** Espèces qu'on peut rencontrer dans une zone (comme le jeu : poids > 0 — les fossiles de la zone ont un poids nul). */
   const wildDexes = (area) => [...new Set((area?.wildPool ?? []).filter((w) => (w.weight ?? 1) > 0).map((w) => w.dex))].filter((d) => Rt.D.species[d]);
   const currentArea = (save = readSave()) => Rt.D.areas[save?.currentAreaId] ?? null;
+  /**
+   * Chaque région a sa propre sauvegarde : la région où l'on joue est à la racine (areaProgress, pokedex, box…),
+   * les autres sont rangées dans save.parked[région] (port de X1 / mte). Avant la v1.11.2, le bot ne lisait que la
+   * région courante : depuis Johto, les raids et événements débloqués à Kanto semblaient fermés.
+   */
+  const isHereRegion = (save, region) => !region || region === (save?.region ?? currentArea(save)?.regionId);
+  const progressOf = (save, areaId) => {
+    const region = Rt.D.areas[areaId]?.regionId;
+    return isHereRegion(save, region) ? save?.areaProgress?.[areaId] : save?.parked?.[region]?.areaProgress?.[areaId] ?? save?.areaProgress?.[areaId];
+  };
+  const pokedexOf = (save, region) => (isHereRegion(save, region) ? save?.pokedex ?? [] : save?.parked?.[region]?.pokedex ?? []);
   const enemyLevels = (area) => Rt.E.allLevels(area?.enemyUpgradeLevel ?? Rt.D.config.enemyUpgradeLevel ?? 1);
   /** Améliorations de l'adversaire en combat : celles du dresseur de la revanche en cours, sinon celles de la zone. */
   function battleFoeLevels(area) {
@@ -2387,12 +2398,7 @@
 
   /* ---- Raids ---- */
   const raidCfg = () => Rt.D.config.events?.raid;
-  const dailyRaidOpen = (save = readSave()) => {
-    const c = raidCfg();
-    if (!c?.enabled || (c.access && c.access !== 'all')) return false;
-    const p = save?.areaProgress?.[c.unlockAreaId];
-    return !c.unlockAreaId || !!(p?.cleared || p?.bossDefeated);
-  };
+  const dailyRaidOpen = (save = readSave()) => eventOpen('raid', save);
   /** Raids légendaires ouverts (zone terminée) et pas encore capturés. */
   /**
    * État d'un raid légendaire, comme le jeu (im) : « done » s'il est noté fait (events.raidsDone, clé « zone:dex ») ou si
@@ -2402,9 +2408,9 @@
    */
   function raidStatus(save, area, boss) {
     if (save?.events?.raidsDone?.includes(`${area.id}:${boss.dex}`)) return 'done';
-    const p = save?.areaProgress?.[area.id];
+    const p = progressOf(save, area.id);
     if (area.mode && (p?.portal || p?.nightmare)) return p.portal?.won || p.nightmare?.won ? 'open' : 'locked';
-    if (p?.bossesDefeated?.includes(boss.dex) && (save?.pokedex ?? []).includes(boss.dex)) return 'done';
+    if (p?.bossesDefeated?.includes(boss.dex) && pokedexOf(save, area.regionId).includes(boss.dex)) return 'done';
     return p?.cleared ? 'open' : 'locked';
   }
   /**
@@ -2414,14 +2420,12 @@
   function legendaryRaids(save = readSave(), { all = false } = {}) {
     const c = raidCfg();
     if (c?.access && c.access !== 'all') return [];
-    const caughtSet = new Set(save?.pokedex ?? []);
-    const region = save?.region ?? regionId(save);
     const out = [];
+    // Toutes les régions, comme la page des raids (onglets Kanto / Johto…) : un raid d'une autre région se joue d'ici
     for (const a of Rt.D.areaList) {
-      if (a.regionId && region && a.regionId !== region) continue;
       for (const b of a.legendaryBoss ?? []) {
         if (!b.raid || raidStatus(save, a, b) !== 'open') continue;
-        const caught = caughtSet.has(b.dex);
+        const caught = pokedexOf(save, a.regionId).includes(b.dex);
         if (caught && CONFIG.raidOnlyMissing && !all) continue;
         out.push({ areaId: a.id, dex: b.dex, level: b.level, path: `/raid/${a.id}/${b.dex}`, key: `${a.id}/${b.dex}`, caught });
       }
@@ -2433,7 +2437,7 @@
     const st = actState();
     const out = [];
     if (dailyRaidOpen(save) && st.raidDone !== utcDay()) out.push({ key: 'daily', path: '/events/raid', label: 'Raid du jour' });
-    for (const r of legendaryRaids(save, { all })) out.push({ ...r, label: `${Rt.nameOf(r.dex)} · ${Rt.areaLabel(Rt.D.areas[r.areaId])}${r.caught ? ' (déjà au Pokédex)' : ''}` });
+    for (const r of legendaryRaids(save, { all })) out.push({ ...r, label: `${Rt.nameOf(r.dex)} · ${Rt.areaLabel(Rt.D.areas[r.areaId])}${isHereRegion(save, Rt.D.areas[r.areaId]?.regionId) ? '' : ' (' + (Rt.D.regions[Rt.D.areas[r.areaId]?.regionId]?.name ?? '') + ')'}${r.caught ? ' (déjà au Pokédex)' : ''}` });
     return out;
   }
   /**
@@ -2789,7 +2793,7 @@
     const c = Rt.D.config.events?.[id];
     if (!c || (c.access ? c.access !== 'all' : !c.enabled)) return false;
     if (!c.unlockAreaId) return true;
-    const p = save?.areaProgress?.[c.unlockAreaId];
+    const p = progressOf(save, c.unlockAreaId); // zone de déblocage, dans n'importe quelle région
     return !!(p?.cleared || p?.bossDefeated);
   }
   const wheelDue = (save) => CONFIG.eventWheel && eventOpen('wheel', save) && actState().wheelDone !== utcDay();
@@ -4640,7 +4644,7 @@
   }
 
   const api = { itemEvolutions, evolutionTargets, healTierFor, shopTiers, bot, CONFIG, MODES, DEFAULTS, setMode, setOption, resetOptions, setTeamLock, bossMatchup, bossTeam, journal, Rt, mem, readBattle, teamMons, boxMons,
-    upgradeCandidates, rebattleThreats, bestTeamVs, rebattlePlan, starterFor, newRegionOpen, regionSwitchDue, regionSwitchStatus, partnerDialog, regionTick, playPartner, stoneNeeds, stoneGoldShortfall, consumablesReserve, centerCandidates, comboGains, catchScreenDex, captureParam, ballItemOf, upgradePick, xpShare, usefulXp, pickTrainees, catchOnlyDex, wildShare, dexWorthEvolving, dexUsefulEvolutions, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, raidStatus, rebattleActivity, simulateGauntlet, bestGauntletTeam, rebattleUpgrade, battleItems, ensureRaidTeam, openRaids, nextRaid, playRaidPage, playCatch, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
+    upgradeCandidates, rebattleThreats, bestTeamVs, rebattlePlan, starterFor, newRegionOpen, regionSwitchDue, regionSwitchStatus, partnerDialog, regionTick, playPartner, stoneNeeds, stoneGoldShortfall, consumablesReserve, centerCandidates, comboGains, catchScreenDex, captureParam, ballItemOf, upgradePick, xpShare, usefulXp, pickTrainees, catchOnlyDex, wildShare, dexWorthEvolving, dexUsefulEvolutions, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, raidStatus, progressOf, pokedexOf, rebattleActivity, simulateGauntlet, bestGauntletTeam, rebattleUpgrade, battleItems, ensureRaidTeam, openRaids, nextRaid, playRaidPage, playCatch, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
     areaThreats, missingSpecies, desiredArea, buildData, Engine,
     obtainedDex, fossilTargets, catchTargetDex, targetArea, wantLuck, canBreed, dayCarePick, dayCareDue, eventOpen, rebattleState, rebattleMatchup, rebattleDue,
     raidBossHp, raidOdds, raidTrainee, parseSchedule, scheduledMode, Stats, noteCatchResult, notify, WakeLock };
