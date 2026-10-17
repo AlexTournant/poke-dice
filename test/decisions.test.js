@@ -113,12 +113,12 @@ test('capture : Ball choisie à l’écran selon l’enjeu', () => {
   assert.equal(P.chooseBall(opts, { rare: true, why: 'nouvelle espèce' }).t, 'hyper', 'nouvelle espèce : la moins chère ≥ 80 %');
   assert.equal(P.chooseBall(opts, { rare: true, why: 'chromatique' }).t, 'hyper', 'chromatique : meilleure chance, sans Master Ball');
   assert.equal(P.chooseBall(opts, { legendary: true }).t, 'hyper', 'à chance égale, la moins chère (pas la Master)');
-  assert.equal(P.chooseBall(opts, {}).t, 'hyper', 'espèce connue : Super 67 % < 80 %, l’Hyper Ball (100 %) est la moins chère au-dessus');
-  P.setOption('catchKnown', 'cheap', { persist: false });
-  assert.equal(P.chooseBall(opts, {}).t, 'poke', 'option « la moins chère »');
+  assert.equal(P.chooseBall(opts, {}).t, 'poke', 'espèce connue : la moins chère par défaut (rien à gagner au Pokédex)');
+  P.setOption('catchKnown', 'normal', { persist: false });
+  assert.equal(P.chooseBall(opts, {}).t, 'hyper', 'option règle du seuil : Super 67 % < 80 %, l’Hyper Ball (100 %) est la moins chère au-dessus');
   P.setOption('catchKnown', 'free', { persist: false });
   assert.equal(P.chooseBall(opts, {}).t, 'sans', 'option Sans Ball');
-  P.setOption('catchKnown', 'normal', { persist: false });
+  P.setOption('catchKnown', 'cheap', { persist: false });
 });
 
 test('capture : règle du seuil de 80 % (meilleure Ball si aucune ne l’atteint)', () => {
@@ -128,17 +128,19 @@ test('capture : règle du seuil de 80 % (meilleure Ball si aucune ne l’atteint
     { t: 'sans', pct: 0, price: 0, bonus: 0 }, { t: 'poke', pct: 17, price: 20, bonus: 1 },
     { t: 'super', pct: 33, price: 50, bonus: 2 }, { t: 'hyper', pct: 50, price: 100, bonus: 3 },
   ];
-  assert.equal(P.chooseBall(low, {}).t, 'hyper', 'espèce connue, tout sous 80 % : la meilleure chance');
+  assert.equal(P.chooseBall(low, {}).t, 'hyper', 'espèce connue avec l’option seuil, tout sous 80 % : la meilleure chance');
   assert.equal(P.chooseBall(low, { rare: true, why: 'nouvelle espèce' }).t, 'hyper', 'nouvelle espèce : idem');
   const high = [
     { t: 'sans', pct: 50, price: 0, bonus: 0 }, { t: 'poke', pct: 67, price: 20, bonus: 1 },
     { t: 'super', pct: 83, price: 50, bonus: 2 }, { t: 'hyper', pct: 100, price: 100, bonus: 3 },
   ];
-  assert.equal(P.chooseBall(high, {}).t, 'super', 'meilleure ≥ 80 % : on descend à la moins chère qui reste ≥ 80 %');
+  assert.equal(P.chooseBall(high, {}).t, 'super', 'option seuil, meilleure ≥ 80 % : on descend à la moins chère qui reste ≥ 80 %');
+  assert.equal(P.chooseBall(high, { rare: true, why: 'nouvelle espèce' }).t, 'super', 'nouvelle espèce : même règle');
   assert.equal(P.chooseBall(high, { rare: true, why: 'chromatique' }).t, 'hyper', 'chromatique : toujours la meilleure chance');
   P.setOption('catchNewPct', 100, { persist: false });
   assert.equal(P.chooseBall(high, { rare: true, why: 'nouvelle espèce' }).t, 'hyper', 'seuil 100 : toujours la meilleure');
   P.setOption('catchNewPct', 80, { persist: false });
+  P.setOption('catchKnown', 'cheap', { persist: false });
 });
 
 test('boutique : les soins urgents passent avant les Balls (le soin n’est plus affamé)', () => {
