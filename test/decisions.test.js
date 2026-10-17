@@ -173,11 +173,11 @@ test('Pokédex : captures vs évolutions — une zone complète en captures ne r
   assert.notEqual(P.desiredArea(save)?.id, 'forest', 'captures : on quitte la forêt');
   P.setMode('pokedexEvo', { persist: false });
   assert.equal(P.CONFIG.mode, 'pokedex'); assert.equal(P.CONFIG.dexFocus, 'evo');
-  assert.deepEqual(P.missingSpecies(P.Rt.D.areas.forest, save), [10], 'évolutions : recapturer Chenipan pour obtenir Chrysacier/Papilusion');
+  assert.deepEqual(P.missingSpecies(P.Rt.D.areas.forest, save), [10, 25], 'évolutions : recapturer Chenipan (Chrysacier/Papilusion) et Pikachu (Raichu, Pierre Foudre)');
   assert.equal(P.desiredArea(save)?.id, 'forest');
   // On possède un Chrysacier : plus besoin de recapturer, il suffit de l'entraîner → on avance
   save = setup({ box: [['p', 16, 15], ['m', 11, 8]], team: ['p', 'm'], pokedex: [10, 11, 25, 16], area: 'forest' });
-  assert.deepEqual(P.missingSpecies(P.Rt.D.areas.forest, save), []);
+  assert.deepEqual(P.missingSpecies(P.Rt.D.areas.forest, save), [25], 'Chrysacier possédé : plus besoin de Chenipan ; Pikachu reste à capturer pour Raichu (Pierre Foudre)');
   P.setMode('pokedex', { persist: false });
 });
 
@@ -1003,4 +1003,25 @@ test('Centre : les candidats ne dépendent pas de qui est dans l’équipe (plus
     const ids = (save) => P.centerCandidates(save).map((m) => m.id).sort().join(',');
     assert.equal(ids(mk(['dra', 'lev', 'x'])), ids(mk(['dra', 'gro', 'x'])), 'mêmes candidats, Grolem dans l’équipe ou en Boîte');
   } finally { P.setOption('centerMaxBox', 12, { persist: false }); P.setMode('progression', { persist: false }); }
+});
+
+test('Pokédex : évolutions — pierres : capture de la base, farm ₽ si l’or manque, or réservé', () => {
+  P.setMode('pokedexEvo', { persist: false });
+  localStorage.removeItem('pokebot.dexStall');
+  // Pikachu (25) → Raichu (26) avec une Pierre Foudre (₽200, 4 badges). Gros N.60 pour tenir les zones.
+  const save = setup({ box: [['g', 999, 60], ['pk', 25, 20]], team: ['g'], pokedex: [999, 25, 10, 11, 12, 16, 17, 18, 104, 105], badges: 4, gold: 120, area: 'route1' });
+  save.areaProgress.forest = { cleared: true };
+  P.Rt.D.areas.forest.encounterWeights = { wild: 4, trainer: 4 };
+  P.mem.goldArea = null;
+  try {
+    assert.deepEqual(P.stoneNeeds(save).map((n) => [n.item, n.inShop, n.toDex[0]]), [['thunder-stone', true, 26]]);
+    assert.equal(P.stoneGoldShortfall(save), 200 - (120 - P.CONFIG.goldReserve), 'il manque ₽ pour la Pierre Foudre');
+    assert.equal(P.desiredArea(save).id, 'forest', 'farm ₽ dans la zone qui rapporte le plus (dresseurs)');
+    assert.ok(P.consumablesReserve(save) >= 200 + P.CONFIG.goldReserve, 'la pierre est réservée en entier : les améliorations attendent');
+    save.gold = 1000;
+    assert.equal(P.stoneGoldShortfall(save), 0, 'assez d’or : plus besoin de farm');
+    // Sans Pikachu : la forêt reste utile pour capturer la base (évolution par pierre manquante)
+    save.box = save.box.filter((m) => m.id !== 'pk'); save.pokedex = save.pokedex.filter((d) => d !== 25);
+    assert.ok(P.missingSpecies(P.Rt.D.areas.forest, save, 'evo').includes(25), 'Pikachu à capturer pour Raichu (pierre)');
+  } finally { delete P.Rt.D.areas.forest.encounterWeights; P.mem.goldArea = null; P.setMode('progression', { persist: false }); }
 });

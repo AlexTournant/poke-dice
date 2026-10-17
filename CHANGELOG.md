@@ -6,6 +6,16 @@ Chaque section `## [X.Y.Z]` correspond à un tag `vX.Y.Z`. Les notes de la relea
 
 ## [Non publié]
 
+## [1.8.0]
+
+### Ajouté
+
+- Mode « Pokédex : évolutions » : les évolutions par pierre (et autres objets) sont prises en compte de bout en bout :
+  - la base d'une évolution par objet qui manque au Pokédex devient une espèce à capturer (exemple : Pikachu pour Raichu) ;
+  - il manque de l'or pour une pierre utile en vente → le bot va farmer les ₽ dans la zone ouverte la plus rentable et sans risque (`stoneGoldFarm`, activé) ;
+  - l'or des pierres est réservé en entier : les améliorations attendent, et la boutique peut y consacrer jusqu'à 90 % de l'or ;
+  - une pierre absente de la boutique mais trouvable en explorant (lootPool) emmène le bot dans la zone qui la donne.
+
 ## [1.7.7]
 
 ### Corrigé
