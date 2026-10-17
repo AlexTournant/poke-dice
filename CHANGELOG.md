@@ -19,6 +19,7 @@ Chaque section `## [X.Y.Z]` correspond à un tag `vX.Y.Z`. Les notes de la relea
 
 - Mode Farm : « le moins haut niveau mène » (`trainWeakest`) n'est plus actif par défaut. Avec Multi Exp, il faisait combattre le plus faible pendant que les Pokémon au niveau max derrière lui ne gagnaient rien. L'option reste disponible.
 - Mode Pokédex : les espèces déjà capturées ne sont plus fuies tant qu'un élève est dans l'équipe : un combat rapide du porteur, c'est de l'XP gratuite.
+- Capture : la règle du seuil de 80 % (v1.6.1) ne s'applique plus qu'aux espèces absentes du Pokédex. Une espèce déjà capturée reçoit de nouveau la Ball la moins chère (`catchKnown: 'cheap'`, le défaut d'avant la v1.6.1). La règle du seuil reste disponible pour elles dans le panneau.
 
 ## [1.6.1]
 

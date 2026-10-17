@@ -138,9 +138,9 @@
     bossTraineeGain: 1.2,         // un "contre" de la Boîte entre en formation s'il ferait 20 % mieux au niveau du boss
 
     // Capture : chance exacte = (7 − (difficulté − bonus Ball)) / 6, difficulté 1–9 par espèce
-    // Règle des seuils : si même la meilleure Ball reste sous le seuil, on lance la meilleure ; sinon la moins chère au-dessus du seuil
+    // Nouvelle espèce, règle du seuil : si même la meilleure Ball reste sous le seuil, on lance la meilleure ; sinon la moins chère au-dessus
     catchNewPct: 80,              // nouvelle espèce : seuil (100 = toujours la meilleure chance)
-    catchKnown: 'normal',         // espèce déjà au Pokédex : 'normal' (règle du seuil catchMinPct), 'cheap' (Ball la moins chère), 'free' (Sans Ball)
+    catchKnown: 'cheap',          // espèce déjà au Pokédex : 'cheap' (Ball la moins chère), 'normal' (règle du seuil catchMinPct), 'free' (Sans Ball)
     catchMinPct: 80,              // 'normal' : seuil pour les espèces déjà capturées
     catchRarePct: 95,             // chromatique ou légendaire : la meilleure chance possible
     catchTarget: '',              // espèce visée (nom affiché par le jeu) : le bot va dans la meilleure zone pour elle et la capture
@@ -1732,9 +1732,10 @@
   /**
    * Choix de la Ball parmi les options affichées ({pct, price, bonus, master}) :
    *  - chromatique / légendaire / raid : la meilleure chance, au prix le plus bas pour cette chance ;
-   *  - sinon, règle du seuil (80 % par défaut, catchNewPct pour une nouvelle espèce, catchMinPct sinon) :
-   *    si même la meilleure Ball reste sous le seuil, on lance la meilleure ; sinon la moins chère au-dessus.
-   *    Avant la v1.6.1, une espèce connue recevait toujours la Ball la moins chère, même à 33 %.
+   *  - nouvelle espèce, règle du seuil (catchNewPct, 80 %) : si même la meilleure Ball reste sous le seuil,
+   *    on lance la meilleure ; sinon la moins chère au-dessus ;
+   *  - espèce déjà au Pokédex : catchKnown — la moins chère par défaut (la capture n'apporte rien au Pokédex),
+   *    ou la même règle du seuil avec catchMinPct, ou Sans Ball.
    */
   function chooseBall(opts, { legendary = false, rare = false, why = '' } = {}) {
     const byPrice = (a, b) => a.price - b.price || b.pct - a.pct;
@@ -3653,7 +3654,7 @@
       { title: 'Choix de la Ball (chance exacte : dé 1–6 + bonus ≥ difficulté)', fields: [
         { p: 'catchTarget', t: 'text', l: 'Espèce visée (nom affiché en jeu, vide = aucune)', h: 'Le bot va dans la zone ouverte où elle apparaît le plus et la capture avec la meilleure Ball. L’objectif s’efface une fois l’espèce au Pokédex.' },
         { p: 'catchNewPct', t: 'num', l: 'Nouvelle espèce : seuil (%)', min: 30, max: 100, step: 5, h: 'Sous ce seuil, même la meilleure Ball : on la lance. Au-dessus : la moins chère qui le dépasse. 100 = toujours la meilleure.' },
-        { p: 'catchKnown', t: 'sel', l: 'Espèce déjà capturée', o: [['normal', 'règle du seuil ci-dessous'], ['cheap', 'Ball la moins chère'], ['free', 'Sans Ball (gratuit)']] },
+        { p: 'catchKnown', t: 'sel', l: 'Espèce déjà capturée', o: [['cheap', 'Ball la moins chère'], ['normal', 'règle du seuil ci-dessous'], ['free', 'Sans Ball (gratuit)']] },
         { p: 'catchMinPct', t: 'num', l: '↳ seuil (%)', min: 0, max: 100, step: 5 },
         { p: 'pokedexFleeKnownMargin', t: 'num', l: 'Pokédex : fuit les espèces connues si l’équipe dépasse la zone de +N niv.', min: 0, max: 30 },
         { p: 'pokedexStallEncounters', t: 'num', l: 'Pokédex : quitte une zone après N rencontres sans nouvelle espèce', min: 10, max: 500, step: 10 },
