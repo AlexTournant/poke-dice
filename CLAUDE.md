@@ -2,12 +2,22 @@
 
 Userscript Tampermonkey qui joue à Pokédice (https://poke-dice.netlify.app/) à la place du joueur : combats optimisés, soins, captures, boutique, améliorations, Centre, zones, Versus et Raids.
 
-Ce fichier décrit comment travailler sur le projet. Le détail fonctionnel est dans `README.md`.
+Ce fichier décrit comment travailler sur le projet. Le détail fonctionnel est dans `README.md`, le flux de publication dans `CONTRIBUTING.md`.
 
 ## Structure
 
 ```
 poke-dice/
+├── .github/
+│   ├── workflows/
+│   │   ├── ci.yml              # CI : syntaxe, tests, @version à chaque PR
+│   │   └── release.yml         # release GitHub à chaque tag vX.Y.Z
+│   └── pull_request_template.md
+├── scripts/
+│   └── check-version.js        # contrôles de version (PR, tag) et notes de release
+├── CHANGELOG.md                # une section ## [X.Y.Z] par version
+├── CONTRIBUTING.md             # flux PR, publication, protections GitHub
+├── package.json                # scripts npm uniquement (aucune dépendance)
 ├── pokedice-bot.user.js        # LE script (à installer dans Tampermonkey)
 ├── pokedice-bot.test.js        # tests du moteur (pur, sans DOM)
 ├── fixtures/
@@ -20,11 +30,11 @@ poke-dice/
 ## Commandes
 
 ```bash
-node --test pokedice-bot.test.js   # moteur : dégâts, combos, statuts, relances, performance
-node --test test/                  # décisions : boutique, captures, Pokédex, évolutions, Versus, Raids
+npm test          # moteur (dégâts, combos, statuts, relances, performance) + décisions (boutique, captures, Pokédex, Versus, Raids)
+npm run check     # syntaxe du script
 ```
 
-Lancer les deux suites avant tout commit. Aucune dépendance npm : Node natif uniquement.
+Lancer `npm test` avant toute PR : la CI le refait et bloque la fusion si ça échoue. Aucune dépendance npm : `package.json` ne sert qu'à lancer Node.
 
 ## Architecture du script
 
@@ -51,7 +61,7 @@ En Node (`module.exports` présent, pas de `document`), seuls `buildData`, `Engi
 - **Un écran = une politique.** Une nouvelle action se range dans la politique de l'écran concerné et `playBattle`/`playEncounter`/… ne font qu'appeler des sous-fonctions.
 - **Réglages joueur** : persistés dans `localStorage['pokebot.settings']` (`cfg`, `lock`, `mode`, `farmAreaId`, `running`). Toute nouvelle option doit aussi apparaître dans `PANEL` pour être réglable.
 - **Clés localStorage existantes** : `pokebot.settings`, `pokebot.bossFails`, `pokebot.dexStall`, `pokebot.activity`, `pokebot.ledger`, `pokebot.general`. Ne pas renommer une clé sans migration.
-- **Versionner** : incrémenter `@version` dans l'en-tête à chaque release. Tampermonkey ne propose une mise à jour que si la version augmente.
+- **Versionner** : toute modification du script incrémente `@version` (SemVer) et ajoute une section `## [X.Y.Z]` dans `CHANGELOG.md`. La CI le vérifie (`scripts/check-version.js --base`). Une version se publie par tag `vX.Y.Z` (workflow Release). Tampermonkey ne propose une mise à jour que si la version augmente.
 - **Mots-clés de langue** : le bundle du jeu contient plusieurs langues (`LANGS`) ; le script choisit celle de `save.settings.lang`.
 
 ## Pièges connus (documentés dans le code)
@@ -75,3 +85,4 @@ En Node (`module.exports` présent, pas de `document`), seuls `buildData`, `Engi
 - Ne pas ajouter de dépendance npm : le script doit rester un fichier unique installable dans Tampermonkey.
 - Ne pas automatiser ce que le jeu réserve aux administrateurs (« Aucune animation », etc.).
 - Ne pas committer de cookie, de token ni de sauvegarde personnelle (`localStorage` du jeu).
+- Ne pas pousser directement sur `main` : passer par une pull request dont la CI est verte. Ne pas poser un tag `vX.Y.Z` qui ne correspond pas à `@version`.
