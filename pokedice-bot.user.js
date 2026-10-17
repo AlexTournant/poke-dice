@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pokédice Autopilot
 // @namespace    pokedice-bot
-// @version      1.11.4
+// @version      1.12.0
 // @description  Joue à Pokédice — modes Progression / Pokédex / Farm / Versus / Raids : combats optimisés, soins, captures, boutique, améliorations, Centre, zones.
 // @match        https://poke-dice.netlify.app/*
 // @grant        none
@@ -119,6 +119,7 @@
     reportMinutes: 10,            // bilan financier dans le journal toutes les N minutes
     showGoldRate: false,          // barre : or actuel + ₽ gagnés par heure
     showStatus: true,             // barre : dernière action du bot (ligne sous les boutons)
+    showWhy: true,                // barre : bandeau jaune « pourquoi le bot ne fait pas le mode choisi » (repli, région…)
     // Évolutions par objet (Pierres…) : Équipe → Pokémon → UTILISER UN OBJET
     useEvolutionItems: true,      // utilise les objets du Sac qui font évoluer en une espèce absente du Pokédex
     buyEvolutionItems: 'pokedex', // achète les objets manquants : 'pokedex' (mode Pokédex seulement), 'always' ou 'never'
@@ -2139,7 +2140,27 @@
   const msToUtcMidnight = () => { const d = new Date(); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1) - d.getTime(); };
   /** Navigation interne (React Router écoute popstate) — repli quand aucun lien n'est visible. */
   const navTo = (path) => { if (go(path)) return true; history.pushState({}, '', path); dispatchEvent(new PopStateEvent('popstate')); return true; };
-  const actLog = (key, msg) => { if (mem.actLog?.[key] !== msg) { (mem.actLog ??= {})[key] = msg; log(msg); } };
+  /**
+   * Bandeau « pourquoi » sous la barre : quand le bot fait autre chose que le mode choisi (activité verrouillée ou en
+   * attente, équipe en préparation, changement de région…), la raison reste affichée tant qu'elle tient — le journal,
+   * lui, défile. explainClear(key) l'efface quand l'activité reprend vraiment.
+   */
+  function explain(key, msg) {
+    if (mem.why?.key === key && mem.why.msg === msg) return;
+    mem.why = { key, msg, at: Date.now() };
+    ui.why?.();
+  }
+  function explainClear(key) {
+    if (!mem.why || (key && mem.why.key !== key)) return;
+    mem.why = null;
+    ui.why?.();
+  }
+  // Messages d'activité : vs / raid / rb disent pourquoi l'activité ne se joue pas → bandeau
+  const WHY_KEYS = new Set(['vs', 'raid', 'rb']);
+  const actLog = (key, msg) => {
+    if (WHY_KEYS.has(key)) explain(key, msg);
+    if (mem.actLog?.[key] !== msg) { (mem.actLog ??= {})[key] = msg; log(msg); }
+  };
 
   /* ---- Versus ---- */
   const VERSUS_TEAM = 3;
@@ -2743,8 +2764,9 @@
     const st = actState();
     if (CONFIG.activity === 'versus') {
       if (!versusEligible(save)) { const n = (save?.box ?? []).filter((m) => m.level >= 50).length; actLog('vs', `🔒 Versus verrouillé : ${n}/3 Pokémon au N.50 — le bot joue en ${MODES[CONFIG.mode].label} en attendant`); return false; }
-      if ((st.vsNext ?? 0) > Date.now()) return false;
+      if ((st.vsNext ?? 0) > Date.now()) { actLog('vs', `⚔️ Versus : prochaine tentative à ${new Date(st.vsNext).toLocaleTimeString().slice(0, 5)} (attente entre deux combats) — le bot joue en ${MODES[CONFIG.mode].label} en attendant`); return false; }
       mem.vsMine = null; mem.vsPlan = null; mem.vsNeedTeam = null; mem.vsDefenseSet = false; mem.vsDefense = null;
+      explainClear('vs'); mem.actLog && delete mem.actLog.vs;
       log('⚔️ Versus : on y va');
       return navTo('/versus');
     }
@@ -2763,6 +2785,7 @@
         return false;
       }
       mem.raid = { key: r.key, dex: r.dex ?? null, bossLevel: r.level, idle: 0 };
+      explainClear('raid'); mem.actLog && delete mem.actLog.raid;
       log(`🐉 Raid : cap sur ${r.key === 'daily' ? 'le raid du jour' : Rt.nameOf(r.dex)}`);
       return navTo(r.path);
     }
@@ -2804,6 +2827,7 @@
       if (!plan.ready) actLog('rbw', `🏅 Revanche ${rb.tier.id} : la simulation (sans potions ni relances) bat ${plan.beaten}/${plan.total} adversaires — on tente avec ${plan.team.map((m) => m.name).join(' + ')}`);
     }
     mem.errand = 'rebattle'; mem.errandAt = Date.now();
+    explainClear('rb'); mem.actLog && delete mem.actLog.rb;
     log(`🏅 Revanche du Conseil 4 : palier ${rb.tier.id}${rb.step ? `, combat ${rb.step + 1}` : ''} — on y va`);
     // La carte de l'accueil (« Revanche du Conseil 4, palier Bronze : ensuite, … Ouvrir »), sinon la page directement
     const card = $$('button[aria-label]').find((x) => visible(x) && Rt.re('ui.events.rebattle.label').test(norm(x.getAttribute('aria-label'))));
@@ -3998,11 +4022,12 @@
     if (!mem.regionGo) {
       mem.regionGo = next; mem.regionTries = 0;
       log(next.played ? `🧭 retour à ${next.name} (${regionSwitchStatus(save).why})` : `🧭 ${Rt.D.regions[regionId(save)]?.name ?? 'région'} terminée → cap sur ${next.name} (partenaire : ${Rt.nameOf(starterFor(next.id))})`);
+      explain('region', next.played ? `🧭 Le bot retourne à ${next.name} : ${regionSwitchStatus(save).why}.` : `🧭 Le bot part à ${next.name} : la Ligue de ${Rt.D.regions[regionId(save)]?.name ?? 'cette région'} est battue (réglage « Changer de région une fois la Ligue battue »). Partenaire choisi : ${Rt.nameOf(starterFor(next.id))}.`);
     }
     // Arrivé (région déjà jouée : pas d'écran de partenaire)
-    if (next.played && regionId(save) === next.id) { log(`🧭 ${next.name} : on y est`); mem.regionGo = null; mem.regionTries = 0; mem.travelFail.clear(); return false; }
+    if (next.played && regionId(save) === next.id) { log(`🧭 ${next.name} : on y est`); explainClear('region'); mem.regionGo = null; mem.regionTries = 0; mem.travelFail.clear(); return false; }
     if (partnerDialog()) return false; // l'écran du partenaire est traité par la boucle
-    if (++mem.regionTries > 25) { log(`⚠️ changement de région vers ${next.name} impossible pour l'instant — fais-le à la main (Zones → Régions)`); mem.regionFail = true; mem.regionGo = null; return false; }
+    if (++mem.regionTries > 25) { log(`⚠️ changement de région vers ${next.name} impossible pour l'instant — fais-le à la main (Zones → Régions)`); explain('region', `⚠️ Le bot n'arrive pas à passer à ${next.name} : fais-le à la main (Zones → Régions).`); mem.regionFail = true; mem.regionGo = null; return false; }
     const d = dialog();
     // Région déjà jouée : sa carte dans l'onglet Régions (« Kanto : passer à cette région et voir ses zones »)
     const goRe = Rt.re('ui.home.regionGo');
@@ -4198,6 +4223,7 @@
     Object.assign(CONFIG, { dexFocus: 'catch' }, JSON.parse(JSON.stringify(overrides)), { mode: base, modeKey: pick, activity: act });
     applyUserConfig();
     mem.actLog = null;
+    explainClear();
     const saved = readSettings();
     if (typeof saved.lock?.[base] === 'boolean') CONFIG.lockTeam = saved.lock[base]; // choix 🔒 de l'utilisateur pour ce mode
     if (base === 'farm') CONFIG.farmAreaId = farmAreaId ?? CONFIG.farmAreaId ?? readSave()?.currentAreaId ?? null;
@@ -4389,6 +4415,7 @@
     { tab: 'Outils', icon: '🧰', groups: [
       { title: 'Affichage', fields: [
         { p: 'showStatus', t: 'bool', l: 'Afficher ce que fait le bot (ligne sous la barre)' },
+        { p: 'showWhy', t: 'bool', l: 'Expliquer quand le bot fait autre chose que le mode choisi (bandeau jaune)' },
         { p: 'showGoldRate', t: 'bool', l: 'Afficher l’or et les ₽ gagnés par heure' },
         { p: 'notify', t: 'bool', l: 'Notifications (chromatique, légendaire, boss, bot arrêté…)', h: 'Le navigateur demande l’autorisation au démarrage du bot.' },
         { p: 'notifySound', t: 'bool', l: '↳ avec un petit son' },
@@ -4420,6 +4447,9 @@
     button.on{background:#e5533d;color:#fff}
     .chip{display:flex;align-items:center;gap:3px}
     .gold{font-weight:bold}
+    .why{pointer-events:auto;font-size:11px;line-height:1.35;background:#fff4c2;color:#24304f;border:2px solid #e5a33d;border-radius:6px;padding:4px 6px;display:flex;gap:6px;align-items:flex-start}
+    .why b{display:block;color:#a8460f}
+    .why button{padding:0 5px;font-size:10px;margin-left:auto;flex:none}
     .line{font-size:10px;background:rgba(36,48,79,.88);color:#fff;padding:2px 6px;border-radius:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .panel{pointer-events:auto;background:#f7f2e0;color:#24304f;border:2px solid #24304f;border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.3);max-height:72vh;display:flex;flex-direction:column;width:min(94vw,440px)}
     .tabs{display:flex;flex-wrap:wrap;gap:2px;padding:4px;border-bottom:2px solid #24304f}
@@ -4464,8 +4494,9 @@
       this.goldChip = h('span', { className: 'chip gold', title: 'Or actuel · gains par heure (registre du bot)' }, '₽ —');
       const gear = h('button', { title: 'Réglages (dépenses, stocks, combat, captures…) et bilan', onclick: () => this.togglePanel() }, '⚙️');
       this.line = h('div', { className: 'line', style: { display: 'none' } });
+      this.whyBox = h('div', { className: 'why', style: { display: 'none' } });
       this.panel = h('div', { className: 'panel', style: { display: 'none' } });
-      this.box.append(h('div', { className: 'row' }, this.btn, this.modeSel, this.areaSel, lock, this.goldChip, gear), this.line, this.panel);
+      this.box.append(h('div', { className: 'row' }, this.btn, this.modeSel, this.areaSel, lock, this.goldChip, gear), this.line, this.whyBox, this.panel);
       this.root.append(this.box);
       document.body.appendChild(this.host);
       this.refresh();
@@ -4643,12 +4674,26 @@
         return new Option(`${Rt.areaLabel(a)}${save.areaProgress[a.id]?.cleared ? ' ✓' : ''}${miss ? ` (${miss} à capturer)` : ''}${g ? ` ₽${g.toFixed(1)}` : ''}`, a.id, false, a.id === CONFIG.farmAreaId);
       }));
     },
+    /** Bandeau « pourquoi » (mem.why) : masqué par ✕ jusqu'à ce que la raison change. */
+    why() {
+      if (!this.whyBox) return;
+      const w = mem.why;
+      const show = !!w && bot.running && CONFIG.showWhy && this.whyHidden !== w.msg;
+      this.whyBox.style.display = show ? 'flex' : 'none';
+      if (!show) return;
+      const chosen = MODES[CONFIG.activity ?? CONFIG.modeKey ?? CONFIG.mode]?.label ?? CONFIG.mode;
+      const title = w.key === 'region' ? 'Changement de région' : `Mode « ${chosen} » en attente — pourquoi :`;
+      this.whyBox.replaceChildren(
+        h('div', {}, h('b', {}, title), w.msg),
+        h('button', { title: 'Masquer jusqu’à la prochaine raison', onclick: () => { this.whyHidden = w.msg; this.why(); } }, '✕'));
+    },
     status(txt) { if (this.line) { this.line.textContent = txt; this.line.style.display = bot.running && CONFIG.showStatus ? 'block' : 'none'; } },
     refresh(reason) {
       if (!this.btn) return;
       this.btn.textContent = bot.running ? `🤖 ON · ${bot.stats.actions}` : `🤖 OFF${reason ? ' · ' + reason : ''}`;
       this.btn.className = bot.running ? 'on' : '';
       this.line.style.display = bot.running && CONFIG.showStatus ? 'block' : 'none';
+      this.why();
       if (this.goldChip) this.goldChip.style.display = CONFIG.showGoldRate ? '' : 'none';
       if (this.modeSel) this.modeSel.value = CONFIG.activity ?? CONFIG.modeKey ?? CONFIG.mode;
       if (this.lockBox) this.lockBox.checked = !!CONFIG.lockTeam;
@@ -4714,7 +4759,7 @@
   }
 
   const api = { itemEvolutions, evolutionTargets, healTierFor, shopTiers, bot, CONFIG, MODES, DEFAULTS, setMode, setOption, resetOptions, setTeamLock, bossMatchup, bossTeam, journal, Rt, mem, readBattle, teamMons, boxMons,
-    upgradeCandidates, rebattleThreats, bestTeamVs, rebattlePlan, starterFor, newRegionOpen, regionSwitchDue, regionSwitchStatus, playedRegionTarget, partnerDialog, regionTick, playPartner, stoneNeeds, stoneGoldShortfall, consumablesReserve, centerCandidates, comboGains, catchScreenDex, captureParam, ballItemOf, upgradePick, xpShare, usefulXp, pickTrainees, catchOnlyDex, wildShare, dexWorthEvolving, dexUsefulEvolutions, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, raidStatus, progressOf, pokedexOf, rebattleActivity, simulateGauntlet, bestGauntletTeam, rebattleUpgrade, battleItems, ensureRaidTeam, openRaids, nextRaid, playRaidPage, playCatch, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
+    upgradeCandidates, rebattleThreats, bestTeamVs, rebattlePlan, starterFor, newRegionOpen, regionSwitchDue, regionSwitchStatus, playedRegionTarget, partnerDialog, regionTick, playPartner, stoneNeeds, stoneGoldShortfall, consumablesReserve, centerCandidates, comboGains, catchScreenDex, captureParam, ballItemOf, upgradePick, xpShare, usefulXp, pickTrainees, catchOnlyDex, wildShare, dexWorthEvolving, dexUsefulEvolutions, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, raidStatus, progressOf, pokedexOf, rebattleActivity, simulateGauntlet, bestGauntletTeam, rebattleUpgrade, battleItems, ensureRaidTeam, openRaids, nextRaid, explain, explainClear, playRaidPage, playCatch, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
     areaThreats, missingSpecies, desiredArea, buildData, Engine,
     obtainedDex, fossilTargets, catchTargetDex, targetArea, wantLuck, canBreed, dayCarePick, dayCareDue, eventOpen, rebattleState, rebattleMatchup, rebattleDue,
     raidBossHp, raidOdds, raidTrainee, parseSchedule, scheduledMode, Stats, noteCatchResult, notify, WakeLock };

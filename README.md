@@ -20,6 +20,7 @@ Installé ainsi, le script se met à jour automatiquement. Pas à pas, migration
 | 🔒 | Verrouille l'équipe : le Centre ne change ni la composition ni le meneur |
 | ₽ | Or actuel et gains par heure (si activé dans les réglages) |
 | ⚙️ | Panneau de réglages (dépenses, stocks, combat, captures, zones, Versus/Raids) et bilan financier |
+| Bandeau jaune | Apparaît quand le bot fait autre chose que le mode choisi et dit pourquoi : Versus verrouillé, raids faits, revanche pas encore gagnable (entraînement), changement de région… Il reste affiché tant que la raison tient ; ✕ le masque jusqu'à la raison suivante |
 
 Le menu de l'extension Tampermonkey donne accès aux mêmes actions (démarrer, réglages, modes, courses, bilan, équipe de défense Versus).
 
