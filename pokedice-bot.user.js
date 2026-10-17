@@ -1672,11 +1672,17 @@
     return { carriers, kept, trainees };
   }
 
+  /** Meilleurs niveaux parmi l'équipe ET la Boîte (sans fossile) : liste stable quel que soit le contenu de l'équipe. */
+  const centerCandidates = (save) => [...teamMons(save), ...boxMons(save)].filter((m) => m.stats && !m.fossil).sort((a, b) => b.level - a.level || a.id.localeCompare(b.id)).slice(0, CONFIG.centerMaxBox + (Rt.D.config.maxTeamSize ?? 3));
   /* ── 6.5 Centre Pokémon : composition d'équipe + meneur ── */
   async function playCenter() {
     const save = readSave();
     const area = currentArea(save);
-    const prepBoss = bossPending(area, save) && !teamReadyForBoss(area, save, { quiet: true });
+    // Préparation du boss : tant que le boss de la zone attend, l'équipe se compose contre lui (pour s'entraîner, puis
+    // le défier). Décidé sur l'état de la zone, PAS sur l'équipe du moment : avant la v1.7.7, « l'équipe actuelle
+    // n'est pas prête » dépendait de qui était dedans → Leveinard dedans : prête → équipe XP → Leveinard sort →
+    // plus prête → préparation → Leveinard revient… (boucle signalée à la Caverne Azurée, boss Mewtwo)
+    const prepBoss = bossPending(area, save);
     const visit = `${save?.currentAreaId}|${save?.areaProgress?.[save.currentAreaId]?.round}|${save?.box.length}|${prepBoss}|${bossFails(area?.id)}`;
     if (!CONFIG.manageTeam || mem.centerDone === visit) return false;
     if (CONFIG.lockTeam) { mem.centerDone = visit; log('🔒 Centre : équipe verrouillée, aucun changement'); return false; }
@@ -1684,8 +1690,10 @@
     const bossThreats = bossTeam(area).map((b) => ({ ...b, weight: 1 }));
     const threats = compactThreats(prepBoss ? [...areaThreats(area), ...bossThreats.map((b) => ({ ...b, weight: 8 }))] : areaThreats(area));
     const team = teamMons(save);
-    // Boîte : seuls les meilleurs niveaux peuvent prétendre à une place → on borne le travail
-    const box = boxMons(save).filter((m) => m.stats && !m.fossil).sort((a, b) => b.level - a.level).slice(0, CONFIG.centerMaxBox);
+    // Candidats : l'équipe + les meilleurs niveaux de TOUT le monde (équipe comprise). Le classement ne dépend donc pas
+    // de qui est dans l'équipe : avant la v1.7.7, un Pokémon renvoyé en Boîte pouvait sortir du « top de la Boîte »,
+    // ne plus être évalué, puis y revenir dès qu'un autre sortait.
+    const box = centerCandidates(save).filter((m) => !team.some((t) => t.id === m.id));
     const all = [];
     const t0 = performance.now();
     for (const m of [...team, ...box]) {
@@ -4219,7 +4227,7 @@
   }
 
   const api = { itemEvolutions, evolutionTargets, healTierFor, shopTiers, bot, CONFIG, MODES, DEFAULTS, setMode, setOption, resetOptions, setTeamLock, bossMatchup, bossTeam, journal, Rt, mem, readBattle, teamMons, boxMons,
-    upgradeCandidates, comboGains, catchScreenDex, captureParam, ballItemOf, upgradePick, xpShare, usefulXp, pickTrainees, catchOnlyDex, wildShare, dexWorthEvolving, dexUsefulEvolutions, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, battleItems, ensureRaidTeam, openRaids, nextRaid, playRaidPage, playCatch, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
+    upgradeCandidates, centerCandidates, comboGains, catchScreenDex, captureParam, ballItemOf, upgradePick, xpShare, usefulXp, pickTrainees, catchOnlyDex, wildShare, dexWorthEvolving, dexUsefulEvolutions, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, battleItems, ensureRaidTeam, openRaids, nextRaid, playRaidPage, playCatch, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
     areaThreats, missingSpecies, desiredArea, buildData, Engine,
     obtainedDex, fossilTargets, catchTargetDex, targetArea, wantLuck, canBreed, dayCarePick, dayCareDue, eventOpen, rebattleState, rebattleMatchup, rebattleDue,
     raidBossHp, raidOdds, raidTrainee, parseSchedule, scheduledMode, Stats, noteCatchResult, notify, WakeLock };
