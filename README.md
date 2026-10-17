@@ -28,11 +28,15 @@ Le menu de l'extension Tampermonkey donne accès aux mêmes actions (démarrer, 
 - **Progression** : enchaîne les zones et les arènes.
 - **Pokédex : captures** : reste dans les zones où il manque des espèces sauvages et capture chaque nouvelle espèce avec la meilleure chance disponible (Ball, appât, amélioration « Chance de capture »). Les fossiles en cours de réveil comptent comme obtenus ; les fossiles d'espèces manquantes sont achetés ou cherchés dans leur zone.
 - **Pokédex : évolutions** : recapture les espèces qui débloquent une évolution par niveau manquante, entraîne le Pokémon le plus proche du palier, utilise les pierres possédées.
-- **Farm** : reste dans une zone choisie (XP, ₽, chromatiques), avec l'équipe verrouillée. Objectif « ₽ » : choisit la zone la plus rentable.
+- **Farm** : reste dans une zone choisie (XP, ₽, chromatiques), avec l'équipe verrouillée. Objectifs automatiques : « XP » (zone qui rapporte le plus d'XP sans risque) ou « ₽ » (zone la plus rentable).
 - **Versus** : compose une équipe taillée contre chaque adversaire (3 Pokémon au N.50, compte connecté requis), sinon joue dans le mode de repli.
 - **Raids** : raid du jour et raids légendaires des zones terminées. L'équipe, les alliés PNJ et les amis sont choisis sur les dégâts infligés au boss (règles de type du raid). Si l'estimation prévoit une défaite nette, le bot arrête pour la journée et entraîne un « contre » au Centre.
 
 Dans tous les modes, une **espèce visée** (onglet Captures) emmène le bot dans la zone où elle apparaît le plus, jusqu'à sa capture.
+
+### XP : porteur et élèves (tous modes)
+
+Le jeu partage l'XP (Multi Exp) : un Pokémon de l'équipe qui ne combat pas reçoit 30 % de l'XP, plus 5 % par niveau d'écart avec le combattant. Au moins 14 niveaux plus bas, il reçoit donc 100 %. Au Centre, le Pokémon le plus fort **porte** l'équipe et les autres places vont à des **élèves** de la Boîte, choisis dans cet ordre : évolution qui manque au Pokédex, Versus (N.50), contre d'un raid perdu, meilleur potentiel. Le meneur est choisi pour l'XP utile : plus d'XP perdue sur des Pokémon au niveau 100.
 
 ### Routines (tous modes)
 

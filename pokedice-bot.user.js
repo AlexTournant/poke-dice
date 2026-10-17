@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pokédice Autopilot
 // @namespace    pokedice-bot
-// @version      1.6.1
+// @version      1.7.0
 // @description  Joue à Pokédice — modes Progression / Pokédex / Farm / Versus / Raids : combats optimisés, soins, captures, boutique, améliorations, Centre, zones.
 // @match        https://poke-dice.netlify.app/*
 // @grant        none
@@ -144,7 +144,11 @@
     catchMinPct: 80,              // 'normal' : seuil pour les espèces déjà capturées
     catchRarePct: 95,             // chromatique ou légendaire : la meilleure chance possible
     catchTarget: '',              // espèce visée (nom affiché par le jeu) : le bot va dans la meilleure zone pour elle et la capture
-    farmGoal: 'xp',
+    farmGoal: 'xp',               // mode Farm : 'xp' (zone choisie), 'xpAuto' (zone qui rapporte le plus d'XP sans risque) ou 'gold'
+    // XP : porteur + élèves (Multi Exp du jeu : un Pokémon ≥ 14 niveaux sous le combattant reçoit 100 % de l'XP sans combattre)
+    xpTrainees: true,             // au Centre : le plus fort porte l'équipe, les autres places vont à des élèves de la Boîte
+    carrierSafeScore: 1.6,        // ↳ duel moyen du porteur contre la zone sous lequel on garde 2 porteurs (1 seul élève)
+    xpLead: true,                 // meneur choisi pour l'XP utile (pas d'XP perdue au niveau max), parmi les duels sans risque
     dexFocus: 'catch',            // mode Pokédex : 'catch' (espèces sauvages jamais capturées) ou 'evo' (évolutions manquantes)
     // Activités (modes Versus / Raids) : le bot y va quand c'est ouvert, sinon il joue dans le mode de repli
     activity: null,
@@ -188,8 +192,8 @@
     progression: { label: 'Progression', stock: { heal: 4, ball: 8, rareBall: 2, cure: 1, ether: 1, bait: 2 }, lockTeam: false, trainWeakest: false },
     pokedex: { label: 'Pokédex : captures', dexFocus: 'catch', stock: { heal: 4, ball: 10, rareBall: 4, cure: 1, ether: 1, bait: 4 }, lockTeam: false, trainWeakest: false },
     pokedexEvo: { label: 'Pokédex : évolutions', baseMode: 'pokedex', dexFocus: 'evo', stock: { heal: 4, ball: 6, rareBall: 2, cure: 1, ether: 1, bait: 1 }, lockTeam: false, trainWeakest: false },
-    // Farm : ton équipe est respectée (verrouillée) et le moins haut niveau mène quand c'est sans risque
-    farm: { label: 'Farm', stock: { heal: 5, ball: 8, rareBall: 3, cure: 1, ether: 1, bait: 2 }, lockTeam: true, trainWeakest: true },
+    // Farm : ton équipe est respectée (verrouillée) ; le meneur est choisi pour l'XP utile (voir xpLead)
+    farm: { label: 'Farm', stock: { heal: 5, ball: 8, rareBall: 3, cure: 1, ether: 1, bait: 2 }, lockTeam: true, trainWeakest: false },
     versus: { label: 'Versus', activity: true },
     raid: { label: 'Raids', activity: true },
   };
@@ -1164,8 +1168,12 @@
     const safe = scored.filter((x) => x.s >= CONFIG.trainMinScore);
     const trainee = mem.trainee && safe.find((x) => x.m.id === mem.trainee);
     const weakest = CONFIG.trainWeakest && [...safe].sort((a, b) => a.m.level - b.m.level)[0];
-    const best = trainee || weakest || scored[0];
-    if ((trainee || weakest) && best !== scored[0] && CONFIG.debug) mem.trainingNote = `🎓 ${best.m.name} N.${best.m.level} mène pour l'XP (duel ${best.s.toFixed(2)})`;
+    // XP utile : parmi les meneurs sans risque, celui qui fait gagner le plus d'XP à l'équipe (Multi Exp compris).
+    // Un porteur au niveau max mène si les élèves derrière lui prennent 100 % ; sinon un élève sûr peut mener.
+    const xpBest = CONFIG.xpLead && !CONFIG.trainWeakest && (kind === 'wild' || kind === 'trainer') && safe.length
+      ? [...safe].sort((a, b) => usefulXp(b.m, team, save) - usefulXp(a.m, team, save) || b.s - a.s)[0] : null;
+    const best = weakest || (xpBest && usefulXp(xpBest.m, team, save) > usefulXp(scored[0].m, team, save) ? xpBest : null) || trainee || scored[0];
+    if (best !== scored[0] && CONFIG.debug) mem.trainingNote = `🎓 ${best.m.name} N.${best.m.level} mène pour l'XP (duel ${best.s.toFixed(2)})`;
     const training = best !== scored[0]; // meneur choisi pour l'XP : le gain de score n'est pas le critère
     if (CONFIG.manageLead && best && cur && best.m.id !== cur.m.id && (training || best.s > cur.s * CONFIG.leadSwitchGain)) {
       const target = sendBtns.find((x) => norm(x.getAttribute('aria-label')).endsWith(norm(best.m.name)));
@@ -1189,7 +1197,8 @@
 
     if (kind === 'wild' && bestS < CONFIG.fleeIfBestScoreBelow && !isNew && !isShiny) { const f = btn('ui.enc.flee'); if (f) { log(`🏃 fuite (meilleur score ${bestS.toFixed(2)})`); Ledger.encounter(); f.click(); return true; } }
     // Mode Pokédex : pas besoin d'XP ni de captures en double → on ne perd pas de temps sur les espèces connues
-    if (CONFIG.mode === 'pokedex' && CONFIG.dexFocus !== 'evo' && kind === 'wild' && !isNew && !isShiny && !mem.trainee && avg(topLevels(teamMons(save))) >= (area?.maxLevel ?? 0) + CONFIG.pokedexFleeKnownMargin) {
+    const inTraining = !!mem.trainee || teamMons(save).some((m) => mem.xpTrainees?.includes(m.id) && m.level < maxLevel());
+    if (CONFIG.mode === 'pokedex' && CONFIG.dexFocus !== 'evo' && kind === 'wild' && !isNew && !isShiny && !inTraining && avg(topLevels(teamMons(save))) >= (area?.maxLevel ?? 0) + CONFIG.pokedexFleeKnownMargin) {
       const f = btn('ui.enc.flee'); if (f) { log(`🏃 déjà au Pokédex : ${foe ? Rt.nameOf(foe.dex) : '?'} (fuite)`); Ledger.encounter(); f.click(); return true; }
     }
     if (kind === 'trainer' && bestS < CONFIG.avoidTrainerIfBelow && !(CONFIG.mode === 'farm' && CONFIG.farmGoal === 'gold' && bestS >= CONFIG.avoidTrainerIfBelow * 0.7)) { const a = btn('ui.enc.avoid'); if (a) { log(`🙈 dresseur évité (score ${bestS.toFixed(2)})`); a.click(); return true; } }
@@ -1415,7 +1424,7 @@
     // Espèce visée (tous modes) : la zone ouverte où elle apparaît le plus souvent
     const target = targetArea(save);
     if (target) return target;
-    if (CONFIG.mode === 'farm') return (CONFIG.farmGoal === 'gold' && bestGoldArea(save)) || (Rt.D.areas[CONFIG.farmAreaId] ?? cur);
+    if (CONFIG.mode === 'farm') return (CONFIG.farmGoal === 'gold' && bestGoldArea(save)) || (CONFIG.farmGoal === 'xpAuto' && bestXpArea(save)) || (Rt.D.areas[CONFIG.farmAreaId] ?? cur);
     if (CONFIG.mode === 'pokedex') {
       // captures : zones avec des espèces sauvages jamais capturées ; évolutions : zones où recapturer une lignée
       if (missingSpecies(cur, save).length && !dexStalled(cur)) return cur;
@@ -1479,6 +1488,37 @@
     const back = p?.cleared || p?.bossDefeated ? area.backtrackMultiplier ?? 0.5 : 1;
     return (w.trainer / total) * 2 * lvl * (Rt.D.config.goldMultiplier ?? 0.5) * back;
   }
+  /**
+   * XP espérée par rencontre (port de AJ) : niveau moyen adverse × xpMultiplier (jeu et zone), ×0,5 si la zone est terminée.
+   * Seuls les combats (sauvages, dresseurs) rapportent : objets, Centre et Casino comptent pour zéro.
+   */
+  function xpPerEncounter(area, save = readSave()) {
+    const w = area?.encounterWeights ?? { wild: 1 };
+    const total = Object.values(w).reduce((a, b) => a + (b || 0), 0);
+    if (!total) return 0;
+    const fights = ((w.wild ?? 0) + (w.trainer ?? 0)) / total;
+    const lvl = ((area.minLevel ?? 1) + (area.maxLevel ?? area.minLevel ?? 1)) / 2;
+    const p = save?.areaProgress?.[area.id];
+    const back = p?.cleared || p?.bossDefeated ? area.backtrackMultiplier ?? 0.5 : 1;
+    return fights * lvl * (Rt.D.config.xpMultiplier ?? 1) * (area.xpMultiplier ?? 1) * back;
+  }
+  /** Zone ouverte qui rapporte le plus d'XP par rencontre et que le meilleur Pokémon de l'équipe tient sans risque. */
+  function bestXpArea(save = readSave()) {
+    if (mem.xpArea && Date.now() - mem.xpArea.at < 60000) return Rt.D.areas[mem.xpArea.id] ?? null;
+    const carrier = teamMons(save).filter((m) => m.stats).sort((a, b) => b.level - a.level)[0];
+    const region = currentArea(save)?.regionId ?? save?.region;
+    const cands = carrier ? Rt.D.areaList.filter((a) => a.regionId === region && !a.hidden && save?.areaProgress?.[a.id] && !mem.travelFail.has(a.id)) : [];
+    let best = null;
+    for (const a of cands) {
+      const xp = xpPerEncounter(a, save);
+      if (!(xp > (best?.xp ?? 0))) continue;
+      if (scoreVsThreats(carrier, compactThreats(areaThreats(a)), a) < CONFIG.carrierSafeScore) continue;
+      best = { a, xp };
+    }
+    mem.xpArea = { id: best?.a.id ?? null, at: Date.now() };
+    if (best && mem.xpAreaLog !== best.a.id) { mem.xpAreaLog = best.a.id; log(`📈 farm XP : ${Rt.areaLabel(best.a)} (≈ ${best.xp.toFixed(1)} XP par rencontre, ${carrier.name} la tient sans risque)`); }
+    return best?.a ?? null;
+  }
   /** Zone ouverte la plus rentable que l'équipe tient sans risque (niveau max ≤ niveau moyen du top 3). */
   function bestGoldArea(save = readSave()) {
     if (mem.goldArea && Date.now() - mem.goldArea.at < 60000) return Rt.D.areas[mem.goldArea.id] ?? null;
@@ -1489,6 +1529,74 @@
     mem.goldArea = { id: best?.a.id ?? null, at: Date.now() };
     if (best && mem.goldAreaLog !== best.a.id) { mem.goldAreaLog = best.a.id; log(`💰 farm à ₽ : ${Rt.areaLabel(best.a)} (≈ ₽${best.g.toFixed(1)} par rencontre)`); }
     return best?.a ?? null;
+  }
+
+  /* ── XP : Multi Exp, porteur et élèves ── */
+  const maxLevel = () => Rt.D.config.maxLevel ?? 100;
+  /** Multi Exp actif : config du jeu (multiExpShare > 0, mode "fighter") et réglage du joueur. */
+  const multiExpOn = (save = readSave()) => (Rt.D.config.multiExpShare ?? 0) > 0 && Rt.D.config.xpShareMode !== 'team' && save?.settings?.multiExp !== false;
+  /**
+   * Part d'XP d'un membre qui ne combat pas (port de CJ) : 30 % + 5 % par niveau d'écart avec le combattant, plafonnée.
+   * xpShareMode "team" : tout le monde reçoit 100 %.
+   */
+  function xpShare(fighterLevel, memberLevel, save = readSave()) {
+    const c = Rt.D.config;
+    if (c.xpShareMode === 'team') return 1;
+    if (!multiExpOn(save)) return 0;
+    const cap = clamp(c.multiExpMaxShare ?? 1, 0, 1);
+    return clamp((c.multiExpShare ?? 0) + Math.max(0, fighterLevel - memberLevel) * Math.max(0, c.multiExpGapBonus ?? 0), 0, cap);
+  }
+  /**
+   * XP utile si `lead` combat : chaque membre sous le niveau max reçoit sa part (100 % pour le combattant),
+   * pondérée par sa priorité (élève désigné ×2). L'XP d'un Pokémon au niveau max est perdue.
+   */
+  function usefulXp(lead, team, save = readSave()) {
+    const max = maxLevel();
+    const prio = (m) => (mem.xpTrainees?.includes(m.id) || m.id === mem.trainee ? 2 : 1);
+    return team.reduce((n, m) => n + (m.level >= max ? 0 : (m.id === lead.id ? 1 : xpShare(lead.level, m.level, save)) * prio(m)), 0);
+  }
+  /** Potentiel d'un Pokémon au niveau max (PV × dégâts moyens bruts) : départage les élèves sans autre priorité. */
+  function potentialAtMax(m) {
+    const st = Rt.E.speciesAt(m.dex, maxLevel());
+    if (!st) return 0;
+    const avgDie = (t) => { const fs = Rt.E.facesOf(t); return fs.reduce((a, f) => a + Rt.E.faceVal(f), 0) / fs.length; };
+    return st.maxHp * st.dice.reduce((a, t) => a + avgDie(t), 0);
+  }
+  /**
+   * Élèves à faire monter, par priorité :
+   *  1. une évolution par niveau qui manque au Pokédex ;  2. Versus : les plus hauts sous le N.50 tant qu'il n'y en a pas 3 ;
+   *  3. le contre du raid perdu (raidTrain) ;  4. le meilleur potentiel au niveau max.
+   * Jamais un fossile, un Pokémon au niveau max ni un porteur.
+   * @returns {{m:object, why:string}[]}
+   */
+  function pickTrainees(save, n, exclude = new Set()) {
+    if (n <= 0) return [];
+    const max = maxLevel();
+    const pool = [...teamMons(save), ...boxMons(save)].filter((m) => m.stats && !m.fossil && m.level < max && !exclude.has(m.id));
+    const out = [], taken = new Set();
+    const take = (m, why) => { if (m && !taken.has(m.id) && out.length < n && pool.some((x) => x.id === m.id)) { taken.add(m.id); out.push({ m, why }); } };
+    for (const t of evolutionTargets(save)) if (t.level != null && t.toGo > 0) take(pool.find((x) => x.id === t.mon.id), `évolution ${Rt.nameOf(t.toDex)} au N.${t.level}`);
+    const vsLevel = 50;
+    const n50 = (save?.box ?? []).filter((m) => m.level >= vsLevel).length;
+    if (n50 < 3) for (const m of [...pool].filter((x) => x.level < vsLevel).sort((a, b) => b.level - a.level).slice(0, 3 - n50)) take(m, 'Versus (N.50)');
+    const rt = actState().raidTrain;
+    if (rt && rt.until > Date.now()) { const t = raidTrainee(save, rt.dex, rt.level); if (t) take(t.m, `raid contre ${Rt.nameOf(rt.dex)}`); }
+    for (const m of [...pool].sort((a, b) => potentialAtMax(b) - potentialAtMax(a))) take(m, 'potentiel au N.' + max);
+    return out;
+  }
+
+  /**
+   * Équipe « porteur + élèves » : le meilleur duel contre la zone porte l'équipe (2 porteurs s'il reste sous
+   * carrierSafeScore), un élève déjà désigné (boss, évolution, raid) garde sa place, le reste va à pickTrainees.
+   * @param {object[]} cands  candidats évalués au Centre (équipe + meilleurs niveaux de la Boîte)
+   */
+  function xpTeamPlan(save, cands, threats, area, size, keep = null) {
+    const raw = cands.filter((m) => m.stats).map((m) => ({ m, s: scoreVsThreats(m, threats, area) })).sort((a, b) => b.s - a.s);
+    const nCarriers = Math.min(size, raw[0] && raw[0].s >= CONFIG.carrierSafeScore ? 1 : 2);
+    const carriers = raw.slice(0, nCarriers).map((x) => x.m);
+    const kept = keep && !carriers.some((c) => c.id === keep.id) && carriers.length < size ? [keep] : [];
+    const trainees = pickTrainees(save, size - carriers.length - kept.length, new Set([...carriers, ...kept].map((m) => m.id)));
+    return { carriers, kept, trainees };
   }
 
   /* ── 6.5 Centre Pokémon : composition d'équipe + meneur ── */
@@ -1560,6 +1668,25 @@
         if (!want.some((m) => m.id === t.m.id)) want[want.length - 1] = t.m;
         mem.trainee = t.m.id;
         if (mem.raidTrainLog !== t.m.id) { mem.raidTrainLog = t.m.id; log(`🎓 formation raid : ${t.m.name} N.${t.m.level} → N.${raidCfg()?.teamCap ?? 50} contre ${Rt.nameOf(rt.dex)}`); }
+      }
+    }
+
+    // XP : le plus fort porte l'équipe, les autres places vont à des élèves (Multi Exp : 100 % de l'XP sans combattre).
+    // Pas pendant la préparation d'un boss : l'équipe complète compte alors.
+    mem.xpTrainees = [];
+    if (CONFIG.xpTrainees && !prepBoss && size > 1) {
+      const { carriers, kept, trainees } = xpTeamPlan(save, all.map((x) => x.m), threats, area, size, mem.trainee ? want.find((m) => m.id === mem.trainee) : null);
+      if (carriers.length && (multiExpOn(save) || Rt.D.config.xpShareMode === 'team')) {
+        want.splice(0, want.length, ...carriers, ...kept, ...trainees.map((t) => t.m));
+        mem.xpTrainees = [...kept.map((m) => m.id), ...trainees.map((t) => t.m.id)];
+        const sig = want.map((m) => m.id).join(',');
+        if (mem.xpLog !== sig) {
+          mem.xpLog = sig;
+          log(`🎓 XP : ${carriers.map((m) => `${m.name} N.${m.level}`).join(' + ')} porte${carriers.length > 1 ? 'nt' : ''} l'équipe${trainees.length ? ' · élèves : ' + trainees.map((t) => `${t.m.name} N.${t.m.level} (${t.why})`).join(', ') : ''}`);
+        }
+      } else if (!multiExpOn(save) && !mem.multiExpWarned) {
+        mem.multiExpWarned = true;
+        log('⚠️ Multi Exp désactivé dans les réglages du jeu : seuls les combattants gagnent de l’XP (le bot fait mener les élèves quand c’est sans risque)');
       }
     }
 
@@ -3420,7 +3547,7 @@
     setPath(CONFIG, path, value);
     if (path === 'keepAwake' && typeof WakeLock !== 'undefined') { if (value && bot.running) WakeLock.on(); else WakeLock.off(); }
     if (persist) writeSettings({ cfg: { ...readSettings().cfg, [path]: value } });
-    mem.lastChoresGold = -1; mem.centerDone = null; mem.goldArea = null; mem.saveLog = null;
+    mem.lastChoresGold = -1; mem.centerDone = null; mem.goldArea = null; mem.xpArea = null; mem.saveLog = null;
     if (path === 'activityFallback' && CONFIG.activity) setMode(CONFIG.activity);
     ui.refresh();
   }
@@ -3536,13 +3663,16 @@
     { tab: 'Équipe & zones', icon: '🗺️', groups: [
       { title: 'Équipe', fields: [
         { p: 'manageTeam', t: 'bool', l: 'Composer l’équipe au Centre' },
-        { p: 'trainWeakest', t: 'bool', l: 'Le moins haut niveau mène quand c’est sans risque' },
-        { p: 'trainMinScore', t: 'num', l: '↳ duel minimal', min: 1, max: 3, step: 0.05 },
+        { p: 'xpTrainees', t: 'bool', l: 'XP : un porteur + des élèves de la Boîte', h: 'Multi Exp : un Pokémon au moins 14 niveaux sous le combattant reçoit 100 % de l’XP sans combattre. Plus d’XP perdue sur des Pokémon au niveau max.' },
+        { p: 'carrierSafeScore', t: 'num', l: '↳ 2 porteurs si le duel du porteur est sous', min: 1, max: 4, step: 0.05 },
+        { p: 'xpLead', t: 'bool', l: 'Meneur choisi pour l’XP utile (si sans risque)' },
+        { p: 'trainWeakest', t: 'bool', l: 'Ancien : le moins haut niveau mène quand c’est sans risque' },
+        { p: 'trainMinScore', t: 'num', l: '↳ duel minimal d’un meneur « pour l’XP »', min: 1, max: 3, step: 0.05 },
         { p: 'useEvolutionItems', t: 'bool', l: 'Utiliser les objets d’évolution du Sac' },
       ] },
       { title: 'Zones & boss', fields: [
         { p: 'autoTravel', t: 'bool', l: 'Changer de zone automatiquement' },
-        { p: 'farmGoal', t: 'sel', l: 'Mode Farm : objectif', o: [['xp', 'XP / chromatiques (zone choisie)'], ['gold', '₽ (zone la plus rentable)']] },
+        { p: 'farmGoal', t: 'sel', l: 'Mode Farm : objectif', o: [['xp', 'XP / chromatiques (zone choisie)'], ['xpAuto', 'XP (zone la plus rentable sans risque)'], ['gold', '₽ (zone la plus rentable)']] },
         { p: 'nextAreaLevelSlack', t: 'num', l: 'Zone suivante si niveau ≥ min − N', min: 0, max: 20 },
         { p: 'bossReadyScore', t: 'num', l: 'Boss : duel moyen exigé', min: 0.5, max: 3, step: 0.05 },
         { p: 'bossWorstScore', t: 'num', l: 'Boss : pire duel accepté', min: 0, max: 2, step: 0.05 },
@@ -3813,7 +3943,7 @@
       if (this.modeSel) this.modeSel.value = CONFIG.activity ?? CONFIG.modeKey ?? CONFIG.mode;
       if (this.lockBox) this.lockBox.checked = !!CONFIG.lockTeam;
       if (this.areaSel) {
-        this.areaSel.style.display = CONFIG.mode === 'farm' && CONFIG.farmGoal !== 'gold' ? '' : 'none';
+        this.areaSel.style.display = CONFIG.mode === 'farm' && CONFIG.farmGoal === 'xp' ? '' : 'none';
         if (CONFIG.mode === 'farm' && !this.areaSel.options.length) this.fillAreas();
       }
       if (this.goldChip && Ledger.d) { const g = readSave()?.gold; this.goldChip.textContent = `₽${g ?? '—'} · +${Math.round(Ledger.perHour().income)}/h`; }
@@ -3874,7 +4004,7 @@
   }
 
   const api = { itemEvolutions, evolutionTargets, healTierFor, shopTiers, bot, CONFIG, MODES, DEFAULTS, setMode, setOption, resetOptions, setTeamLock, bossMatchup, bossTeam, journal, Rt, mem, readBattle, teamMons, boxMons,
-    upgradeCandidates, comboGains, upgradePick, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, nextRaid, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
+    upgradeCandidates, comboGains, upgradePick, xpShare, usefulXp, pickTrainees, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, nextRaid, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
     areaThreats, missingSpecies, desiredArea, buildData, Engine,
     obtainedDex, fossilTargets, catchTargetDex, targetArea, wantLuck, canBreed, dayCarePick, dayCareDue, eventOpen, rebattleState, rebattleMatchup, rebattleDue,
     raidBossHp, raidOdds, raidTrainee, parseSchedule, scheduledMode, Stats, noteCatchResult, notify, WakeLock };

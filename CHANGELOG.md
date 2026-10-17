@@ -6,6 +6,20 @@ Chaque section `## [X.Y.Z]` correspond à un tag `vX.Y.Z`. Les notes de la relea
 
 ## [Non publié]
 
+## [1.7.0]
+
+### Ajouté
+
+- XP « porteur + élèves » (`xpTrainees`) : le jeu donne 30 % de l'XP, plus 5 % par niveau d'écart, aux membres de l'équipe qui ne combattent pas (Multi Exp, port de `CJ`), soit 100 % à partir de 14 niveaux d'écart. Au Centre, le meilleur duel porte l'équipe (deux porteurs si son duel reste sous `carrierSafeScore`) et les autres places vont à des élèves. Priorité des élèves : évolution qui manque au Pokédex, Versus (N.50), contre d'un raid perdu, meilleur potentiel au niveau max. Pas pendant la préparation d'un boss.
+- Meneur choisi pour l'XP utile (`xpLead`) : parmi les duels sans risque, celui qui fait gagner le plus d'XP à l'équipe. L'XP d'un Pokémon au niveau max compte pour zéro.
+- Mode Farm : objectif « XP (zone la plus rentable sans risque) » (`farmGoal: 'xpAuto'`). XP par rencontre = niveau adverse moyen × multiplicateurs, divisée par 2 dans une zone terminée.
+- Journal : avertissement si l'option Multi Exp est coupée dans les réglages du jeu.
+
+### Modifié
+
+- Mode Farm : « le moins haut niveau mène » (`trainWeakest`) n'est plus actif par défaut. Avec Multi Exp, il faisait combattre le plus faible pendant que les Pokémon au niveau max derrière lui ne gagnaient rien. L'option reste disponible.
+- Mode Pokédex : les espèces déjà capturées ne sont plus fuies tant qu'un élève est dans l'équipe : un combat rapide du porteur, c'est de l'XP gratuite.
+
 ## [1.6.1]
 
 ### Corrigé
