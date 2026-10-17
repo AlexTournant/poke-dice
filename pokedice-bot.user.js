@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pokédice Autopilot
 // @namespace    pokedice-bot
-// @version      1.7.4
+// @version      1.7.5
 // @description  Joue à Pokédice — modes Progression / Pokédex / Farm / Versus / Raids : combats optimisés, soins, captures, boutique, améliorations, Centre, zones.
 // @match        https://poke-dice.netlify.app/*
 // @grant        none
@@ -161,6 +161,7 @@
     raidDaily: true,              // raid du jour
     raidLegendary: true,          // raids légendaires des zones terminées
     raidMaxTries: 8,              // essais par raid et par jour avant d'aller s'entraîner
+    raidItems: false,             // raids : utiliser des objets (soins, remèdes, Huiles) sur les copies du raid — chaque objet est une vraie dépense
     raidLoop: false,              // en boucle : aucun plafond d'essais ni arrêt sur estimation défavorable
     raidTarget: '',               // raid choisi (« daily » ou « zone/dex ») ; vide = tous, raid du jour d'abord
     raidOnlyMissing: true,        // seulement les raids d'espèces pas encore au Pokédex (le raid du jour est passé sinon)
@@ -933,6 +934,8 @@
 
   async function battleItems(b) {
     const { me, foe } = b.ctx;
+    // Raid : les Pokémon sont des copies (aucun vrai PV perdu) → pas d'objet, sauf réglage raidItems
+    if ((b.raid || mem.fightKind === 'raid') && !CONFIG.raidItems) return false;
     const turn = `${b.dice.map((d) => d.label).join('|')}@${me.hp}`;
     if (mem.itemTurn === turn) return false; // un objet par tour (et on ne re-teste pas le même tour)
 
@@ -950,9 +953,13 @@
       if (pick) { mem.itemTurn = turn; log(`💊 remède ${Rt.t('item.' + pick.key)} sur ${me.name}`); return useItem(b, pick.key, me.name); }
     }
 
-    // b) Soin PV : en danger (la prochaine attaque peut me sortir) ou sous le seuil, et je ne tue pas ce tour-ci
-    const killNow = Number.isFinite(b.shownDmg) && b.shownDmg >= foe.hp;
-    if (!killNow && me.hp < me.maxHp && shouldHeal(me, foe)) {
+    // b) Soin PV : en danger (la prochaine attaque peut me sortir) ou sous le seuil, et je ne tue pas ce tour-ci.
+    // Dégâts du lancer : affichés par le jeu, sinon calculés (avant la v1.7.5, un affichage illisible = « pas de K.O. »
+    // → potion inutile alors que l'attaque tuait). Et si une relance est prévue, on la joue AVANT de penser au soin.
+    const dmgNow = Number.isFinite(b.shownDmg) ? b.shownDmg : Rt.E.utility(b.dice, b.ctx).dmg.final;
+    const killNow = dmgNow >= foe.hp;
+    const rerollFirst = !killNow && b.rerollsLeft > 0 && !!Rt.E.chooseReroll(b.dice, b.ctx).idx;
+    if (!killNow && !rerollFirst && me.hp < me.maxHp && shouldHeal(me, foe)) {
       const heals = itemsOfKind('heal').sort((a, c) => a.amount - c.amount);
       if (!heals.length && mem.noHealLog !== foe.name) { mem.noHealLog = foe.name; log(`🚫 plus aucun soin dans le Sac (${me.name} ${me.hp}/${me.maxHp} PV) — la boutique en rachètera`); }
       if (heals.length) {
@@ -1877,8 +1884,9 @@
       }
       picked = pick.t.split(':')[0].trim();
     }
-    const bait = btn(rare ? 'ui.catch.baitThrow' : 'ui.catch.baitKeep');
-    if (bait) { bait.click(); return true; }
+    // Appât proposé (la Ball a raté de peu) : on le lance pour une nouvelle espèce, un chromatique, un légendaire ou un raid
+    const bait = btn(rare ? 'ui.catch.baitThrow' : 'ui.catch.baitKeep') ?? btn(['ui.catch.baitThrow', 'ui.catch.baitKeep']);
+    if (bait) { log(`🍓 appât : ${norm(bait.innerText) === norm(Rt.t('ui.catch.baitKeep')) ? 'gardé' : 'lancé'}`); bait.click(); return true; }
     const roll = btn(['ui.catch.roll', 'ui.catch.catch', 'ui.catch.throwAgain']);
     if (roll) {
       const dex = mem.rare?.dex;
@@ -3600,7 +3608,9 @@
 
         if (!acted) { const b = readBattle(); if (b) { if (mem.bossFight) mem.bossFight.seen = true; where = 'battle'; acted = await playBattle(b); } }
 
-        if (!acted && (bodyHas('ui.catch.tip') || btn(['ui.catch.roll', 'ui.catch.catch']))) { where = 'catch'; acted = await playCatch(); }
+        // Écran de capture, y compris « Presque ! Lancer un Appât ? » et « il est toujours là, relance » : ces deux
+        // écrans n'ont ni le bouton LANCER ni l'astuce, et le bot restait bloqué dessus avant la v1.7.5
+        if (!acted && (bodyHas('ui.catch.tip') || btn(['ui.catch.roll', 'ui.catch.catch', 'ui.catch.baitThrow', 'ui.catch.baitKeep', 'ui.catch.throwAgain']))) { where = 'catch'; acted = await playCatch(); }
 
         if (!acted && mem.errand && path === ERRAND_PATH[mem.errand]) { where = mem.errand; acted = await playErrand(); }
         if (!acted && !mem.errand && CONFIG.activity === 'raid' && /^\/(raid|events)\//.test(path)) { where = 'raid'; acted = await playRaidPage(); if (!acted && !readBattle()) acted = false; }
@@ -3861,6 +3871,7 @@
         { p: 'raidLegendary', t: 'bool', l: 'Raids légendaires (zones terminées)' },
         { p: 'raidMaxTries', t: 'num', l: 'Essais max par raid et par jour', min: 1, max: 50 },
         { p: 'raidLoop', t: 'bool', l: 'En boucle (pas de plafond d’essais, pas d’arrêt sur estimation)' },
+        { p: 'raidItems', t: 'bool', l: 'Utiliser des objets en raid (soins, remèdes, Huiles)', h: 'En raid, tes Pokémon sont des copies : ils ne perdent aucun vrai PV. Coupé par défaut : pas de potion dépensée.' },
         { p: 'raidOnlyMissing', t: 'bool', l: 'Seulement les espèces pas encore au Pokédex' },
         { p: 'raidAutoTeam', t: 'bool', l: 'Choisir l’équipe de raid contre le boss' },
         { p: 'raidFriends', t: 'bool', l: 'Ajouter des amis au groupe (compte connecté)' },
@@ -4179,7 +4190,7 @@
   }
 
   const api = { itemEvolutions, evolutionTargets, healTierFor, shopTiers, bot, CONFIG, MODES, DEFAULTS, setMode, setOption, resetOptions, setTeamLock, bossMatchup, bossTeam, journal, Rt, mem, readBattle, teamMons, boxMons,
-    upgradeCandidates, comboGains, catchScreenDex, captureParam, ballItemOf, upgradePick, xpShare, usefulXp, pickTrainees, catchOnlyDex, wildShare, dexWorthEvolving, dexUsefulEvolutions, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, ensureRaidTeam, openRaids, nextRaid, playRaidPage, playCatch, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
+    upgradeCandidates, comboGains, catchScreenDex, captureParam, ballItemOf, upgradePick, xpShare, usefulXp, pickTrainees, catchOnlyDex, wildShare, dexWorthEvolving, dexUsefulEvolutions, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, battleItems, ensureRaidTeam, openRaids, nextRaid, playRaidPage, playCatch, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
     areaThreats, missingSpecies, desiredArea, buildData, Engine,
     obtainedDex, fossilTargets, catchTargetDex, targetArea, wantLuck, canBreed, dayCarePick, dayCareDue, eventOpen, rebattleState, rebattleMatchup, rebattleDue,
     raidBossHp, raidOdds, raidTrainee, parseSchedule, scheduledMode, Stats, noteCatchResult, notify, WakeLock };

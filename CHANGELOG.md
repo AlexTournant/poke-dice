@@ -6,6 +6,17 @@ Chaque section `## [X.Y.Z]` correspond à un tag `vX.Y.Z`. Les notes de la relea
 
 ## [Non publié]
 
+## [1.7.5]
+
+### Corrigé
+
+- Capture : le bot restait bloqué sur « Presque ! Lancer un Appât pour attirer … ? » (et sur « … est toujours là ! », bouton Relancer). Il n'entrait dans la capture que s'il voyait LANCER POUR CAPTURER ou l'astuce de capture, absents de ces écrans. L'appât est lancé pour une nouvelle espèce, un chromatique, un légendaire ou un raid, gardé sinon.
+- Soins : potion utilisée alors que l'attaque tuait l'adversaire. Si le jeu n'affichait pas les dégâts du lancer, le bot considérait qu'on ne tuait pas. Il les calcule maintenant lui-même, et joue d'abord les relances prévues avant d'envisager un soin.
+
+### Modifié
+
+- Raids : plus aucun objet (soins, remèdes, Huiles) pendant un raid par défaut (`raidItems: false`). Les Pokémon du raid sont des copies qui ne perdent aucun vrai PV, alors que chaque potion est une vraie dépense. L'équipe reste choisie sur les dégâts infligés avant K.O., survie comprise.
+
 ## [1.7.4]
 
 ### Corrigé
