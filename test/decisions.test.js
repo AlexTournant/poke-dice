@@ -594,3 +594,75 @@ test('Anti-veille : verrou pris au démarrage, rendu à l’arrêt', async () =>
     assert.equal(calls.length, 2, 'option coupée : aucun verrou');
   } finally { if (before) Object.defineProperty(globalThis, 'navigator', before); else delete globalThis.navigator; P.setOption('keepAwake', true, { persist: false }); }
 });
+
+/* ── v1.7 : XP, porteur et élèves ── */
+const multiExp = () => Object.assign(P.Rt.D.config, { multiExpShare: 0.3, multiExpGapBonus: 0.05, multiExpMaxShare: 1, xpShareMode: 'fighter', maxLevel: 100 });
+
+test('XP : part Multi Exp du jeu (30 % + 5 % par niveau d’écart, plafonnée)', () => {
+  const save = setup({ box: [['a', 999, 50]], team: ['a'], pokedex: [999] });
+  multiExp();
+  assert.equal(P.xpShare(100, 50, save), 1, '50 niveaux d’écart : 100 %');
+  assert.ok(Math.abs(P.xpShare(30, 28, save) - 0.4) < 1e-9, '2 niveaux : 40 %');
+  assert.ok(Math.abs(P.xpShare(20, 40, save) - 0.3) < 1e-9, 'plus haut que le combattant : 30 %');
+  save.settings = { multiExp: false };
+  assert.equal(P.xpShare(100, 50, save), 0, 'Multi Exp coupé par le joueur');
+  P.Rt.D.config.xpShareMode = 'team';
+  assert.equal(P.xpShare(100, 50, save), 1, 'mode « team » : tout le monde');
+});
+
+test('XP : le porteur au niveau max mène, ses élèves prennent tout', () => {
+  const save = setup({ box: [['c', 999, 100], ['t1', 16, 40], ['t2', 10, 40]], team: ['c', 't1', 't2'], pokedex: [999, 16, 10] });
+  multiExp();
+  const [c, t1, t2] = P.teamMons(save);
+  P.mem.xpTrainees = [];
+  assert.equal(P.usefulXp(c, [c, t1, t2], save), 2, 'porteur N.100 : 0 pour lui, 100 % pour chaque élève');
+  assert.ok(Math.abs(P.usefulXp(t1, [c, t1, t2], save) - 1.3) < 1e-9, 'un élève qui mène : 100 % + 30 % pour l’autre élève');
+});
+
+test('XP : élèves choisis par priorité (évolution manquante, Versus, potentiel)', () => {
+  P.setMode('progression', { persist: false });
+  const save = setup({ box: [['c', 999, 100], ['cat', 10, 5], ['pid', 16, 45], ['big', 999, 20], ['max', 17, 100]], team: ['c'], pokedex: [999, 10, 16, 17] });
+  multiExp();
+  const picks = P.pickTrainees(save, 3, new Set(['c']));
+  assert.equal(picks[0].m.id, 'cat', 'Chenipan N.5 → Chrysacier (absent du Pokédex) au N.7 : priorité 1');
+  assert.equal(picks[1].m.id, 'pid', 'Versus : le plus haut sous le N.50');
+  assert.ok(!picks.some((x) => x.m.id === 'max'), 'jamais un Pokémon au niveau max');
+  assert.ok(!picks.some((x) => x.m.id === 'c'), 'jamais le porteur');
+});
+
+test('Farm XP : la zone qui rapporte le plus d’XP que le porteur tient sans risque', () => {
+  P.setMode('farm', { persist: false });
+  const save = setup({ box: [['c', 999, 60]], team: ['c'], pokedex: [999], area: 'route1' });
+  save.areaProgress.forest = { cleared: true };
+  save.areaProgress.cave = {};
+  const { forest, route1, cave } = P.Rt.D.areas;
+  assert.ok(P.xpPerEncounter(forest, save) > P.xpPerEncounter(route1, save), 'niveaux plus hauts en forêt');
+  const xpCave = P.xpPerEncounter(cave, save);
+  save.areaProgress.cave = { cleared: true };
+  assert.ok(Math.abs(P.xpPerEncounter(cave, save) - xpCave / 2) < 1e-9, 'zone terminée : XP divisée par 2');
+  P.setOption('farmGoal', 'xpAuto', { persist: false });
+  try {
+    P.mem.xpArea = null;
+    const best = P.bestXpArea(save);
+    assert.ok(best && best.id !== 'route1', `zone choisie : ${best?.id}`);
+    assert.equal(P.desiredArea(save).id, best.id);
+  } finally { P.setOption('farmGoal', 'xp', { persist: false }); P.setMode('progression', { persist: false }); }
+});
+
+test('Centre : un porteur si la zone est facile, deux sinon, le reste en élèves', () => {
+  P.setMode('progression', { persist: false });
+  const save = setup({ box: [['c', 999, 100], ['c2', 18, 60], ['t1', 16, 30], ['t2', 10, 5]], team: ['c', 'c2', 't1'], pokedex: [999, 18, 16, 10] });
+  multiExp();
+  const mons = [...P.teamMons(save), ...P.boxMons(save)];
+  const area = P.Rt.D.areas.route1;
+  const easy = P.xpTeamPlan(save, mons, P.areaThreats(area).map((x) => ({ ...x, weight: 1 })), area, 3);
+  assert.deepEqual(easy.carriers.map((m) => m.id), ['c'], 'Gros N.100 contre Roucool : un seul porteur');
+  assert.equal(easy.trainees.length, 2);
+  assert.ok(!easy.trainees.some((t) => t.m.id === 'c'), 'le porteur n’est pas un élève');
+  P.setOption('carrierSafeScore', 99, { persist: false });
+  try {
+    const hard = P.xpTeamPlan(save, mons, P.areaThreats(area).map((x) => ({ ...x, weight: 1 })), area, 3);
+    assert.equal(hard.carriers.length, 2, 'zone jugée dangereuse : deux porteurs');
+    assert.equal(hard.trainees.length, 1);
+  } finally { P.setOption('carrierSafeScore', 1.6, { persist: false }); }
+});
