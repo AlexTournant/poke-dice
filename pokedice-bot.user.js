@@ -6,6 +6,10 @@
 // @match        https://poke-dice.netlify.app/*
 // @grant        none
 // @run-at       document-idle
+// @homepageURL  https://github.com/AlexTournant/poke-dice
+// @supportURL   https://github.com/AlexTournant/poke-dice/issues
+// @updateURL    https://raw.githubusercontent.com/AlexTournant/poke-dice/main/pokedice-bot.user.js
+// @downloadURL  https://raw.githubusercontent.com/AlexTournant/poke-dice/main/pokedice-bot.user.js
 // ==/UserScript==
 
 /*

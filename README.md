@@ -5,10 +5,10 @@ Bot Tampermonkey qui joue à [Pokédice](https://poke-dice.netlify.app/) à votr
 ## Installation
 
 1. Installer [Tampermonkey](https://www.tampermonkey.net/) (ou Violentmonkey).
-2. Créer un nouveau script et coller le contenu de `pokedice-bot.user.js`, ou l'ouvrir directement depuis le gestionnaire.
+2. Ouvrir https://raw.githubusercontent.com/AlexTournant/poke-dice/main/pokedice-bot.user.js et cliquer sur **Installer**.
 3. Ouvrir https://poke-dice.netlify.app/ : une barre apparaît en haut à gauche.
 
-La dernière version publiée peut aussi être téléchargée directement : https://github.com/AlexTournant/poke-dice/releases/latest/download/pokedice-bot.user.js
+Installé ainsi, le script se met à jour automatiquement. Pas à pas, migration d'un script collé à la main, réglages de Tampermonkey et dépannage : [INSTALLATION.md](INSTALLATION.md).
 
 ## Utilisation
 
@@ -74,16 +74,11 @@ La CI (GitHub Actions) lance les mêmes contrôles à chaque pull request et blo
 
 Le numéro de version est dans l'en-tête `@version` du script. Les changements sont listés dans [CHANGELOG.md](CHANGELOG.md). Chaque version est publiée par tag (`vX.Y.Z`) avec une release GitHub : voir [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Mise à jour automatique (optionnel)
+## Mise à jour automatique
 
-Pour que Tampermonkey mette le script à jour depuis le dépôt, ajouter dans l'en-tête, à l'URL *raw* du fichier :
+L'en-tête du script contient `@updateURL` et `@downloadURL`, qui pointent vers le fichier de la branche `main`. Tampermonkey vérifie cette URL régulièrement et installe toute version dont `@version` est plus grande.
 
-```js
-// @updateURL    https://raw.githubusercontent.com/AlexTournant/poke-dice/main/pokedice-bot.user.js
-// @downloadURL  https://raw.githubusercontent.com/AlexTournant/poke-dice/main/pokedice-bot.user.js
-```
-
-La branche `main` est protégée : elle ne reçoit que du code validé par la CI. Chaque modification du script doit incrémenter `@version`, sinon Tampermonkey ne proposera pas la mise à jour.
+La branche `main` est protégée : elle ne reçoit que du code validé par la CI. Chaque modification du script doit incrémenter `@version`, sinon Tampermonkey ne proposera pas la mise à jour. Détails et dépannage : [INSTALLATION.md](INSTALLATION.md).
 
 ## Avertissements
 

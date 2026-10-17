@@ -17,6 +17,7 @@ poke-dice/
 │   └── check-version.js        # contrôles de version (PR, tag) et notes de release
 ├── CHANGELOG.md                # une section ## [X.Y.Z] par version
 ├── CONTRIBUTING.md             # flux PR, publication, protections GitHub
+├── INSTALLATION.md             # installation Tampermonkey et mises à jour automatiques
 ├── package.json                # scripts npm uniquement (aucune dépendance)
 ├── pokedice-bot.user.js        # LE script (à installer dans Tampermonkey)
 ├── pokedice-bot.test.js        # tests du moteur (pur, sans DOM)
@@ -61,7 +62,7 @@ En Node (`module.exports` présent, pas de `document`), seuls `buildData`, `Engi
 - **Un écran = une politique.** Une nouvelle action se range dans la politique de l'écran concerné et `playBattle`/`playEncounter`/… ne font qu'appeler des sous-fonctions.
 - **Réglages joueur** : persistés dans `localStorage['pokebot.settings']` (`cfg`, `lock`, `mode`, `farmAreaId`, `running`). Toute nouvelle option doit aussi apparaître dans `PANEL` pour être réglable.
 - **Clés localStorage existantes** : `pokebot.settings`, `pokebot.bossFails`, `pokebot.dexStall`, `pokebot.activity`, `pokebot.ledger`, `pokebot.general`, `pokebot.stats`. Ne pas renommer une clé sans migration.
-- **Versionner** : toute modification du script incrémente `@version` (SemVer) et ajoute une section `## [X.Y.Z]` dans `CHANGELOG.md`. La CI le vérifie (`scripts/check-version.js --base`). Une version se publie par tag `vX.Y.Z` (workflow Release). Tampermonkey ne propose une mise à jour que si la version augmente.
+- **Versionner** : toute modification du script incrémente `@version` (SemVer) et ajoute une section `## [X.Y.Z]` dans `CHANGELOG.md`. La CI le vérifie (`scripts/check-version.js --base`). Une version se publie par tag `vX.Y.Z` (workflow Release). Tampermonkey ne propose une mise à jour que si la version augmente (`@updateURL` / `@downloadURL` suivent `main`). Ne jamais changer `@name`, `@namespace` ni ces URL : les joueurs perdraient les mises à jour.
 - **Mots-clés de langue** : le bundle du jeu contient plusieurs langues (`LANGS`) ; le script choisit celle de `save.settings.lang`.
 
 ## Pièges connus (documentés dans le code)

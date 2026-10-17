@@ -26,6 +26,14 @@ Chaque section `## [X.Y.Z]` correspond à un tag `vX.Y.Z`. Les notes de la relea
 
 - Raids : la capture (« {name} est capturé ! ») et la fuite du boss n'étaient jamais détectées, car le libellé commence par un paramètre. Nouveau test ligne par ligne (`lineHas`).
 
+## [1.5.1]
+
+### Ajouté
+
+- Mise à jour automatique dans Tampermonkey : `@updateURL` et `@downloadURL` pointent vers le script de la branche `main`.
+- `@homepageURL` et `@supportURL` (dépôt et tickets GitHub), affichés dans le tableau de bord Tampermonkey.
+- `INSTALLATION.md` : installation depuis l'URL, migration d'un script collé à la main, réglages de Tampermonkey, dépannage.
+
 ## [1.5.0]
 
 ### Corrigé
