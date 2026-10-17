@@ -993,3 +993,14 @@ test('Revente : jamais le meilleur soin en vente, même devenu faible face à un
   const buys = P.shopWishlist(save).map((x) => x.key);
   assert.ok(!sells.some((k) => buys.includes(k)), 'rien n’est à la fois vendu et acheté');
 });
+
+test('Centre : les candidats ne dépendent pas de qui est dans l’équipe (plus de boucle Leveinard / Grolem)', () => {
+  P.setMode('pokedex', { persist: false });
+  P.setOption('centerMaxBox', 2, { persist: false });
+  try {
+    // 5 Pokémon : deux N.100, un N.69 ; l'équipe change, la liste des candidats non
+    const mk = (team) => setup({ box: [['dra', 999, 100], ['lev', 999, 100], ['gro', 16, 69], ['x', 10, 20], ['y', 16, 15]], team, pokedex: [999, 16, 10] });
+    const ids = (save) => P.centerCandidates(save).map((m) => m.id).sort().join(',');
+    assert.equal(ids(mk(['dra', 'lev', 'x'])), ids(mk(['dra', 'gro', 'x'])), 'mêmes candidats, Grolem dans l’équipe ou en Boîte');
+  } finally { P.setOption('centerMaxBox', 12, { persist: false }); P.setMode('progression', { persist: false }); }
+});

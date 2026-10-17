@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pokédice Autopilot
 // @namespace    pokedice-bot
-// @version      1.7.6
+// @version      1.7.7
 // @description  Joue à Pokédice — modes Progression / Pokédex / Farm / Versus / Raids : combats optimisés, soins, captures, boutique, améliorations, Centre, zones.
 // @match        https://poke-dice.netlify.app/*
 // @grant        none
@@ -1193,10 +1193,19 @@
     const best = weakest || (xpBest && usefulXp(xpBest.m, team, save) > usefulXp(scored[0].m, team, save) ? xpBest : null) || trainee || scored[0];
     if (best !== scored[0] && CONFIG.debug) mem.trainingNote = `🎓 ${best.m.name} N.${best.m.level} mène pour l'XP (duel ${best.s.toFixed(2)})`;
     const training = best !== scored[0]; // meneur choisi pour l'XP : le gain de score n'est pas le critère
-    if (CONFIG.manageLead && best && cur && best.m.id !== cur.m.id && (training || best.s > cur.s * CONFIG.leadSwitchGain)) {
+    // Garde-fou : au plus 2 changements de meneur par rencontre (sinon le bot pouvait alterner sans fin entre deux Pokémon)
+    const encSig = `${kind}|${foe?.dex ?? '?'}|${foe?.level ?? '?'}`;
+    if (mem.leadSwaps?.sig !== encSig) mem.leadSwaps = { sig: encSig, n: 0, from: [] };
+    const swapsLeft = mem.leadSwaps.n < 2 && !(best && mem.leadSwaps.from.includes(best.m.id));
+    if (!swapsLeft && best && cur && best.m.id !== cur.m.id && mem.leadSwaps.logged !== encSig) {
+      mem.leadSwaps.logged = encSig;
+      log(`⛔ meneur : ${cur.m.name} gardé (changements déjà faits pour cette rencontre : ${mem.leadSwaps.n}, ${best.m.name} venait d'être remplacé) — boucle évitée`);
+    }
+    if (swapsLeft && CONFIG.manageLead && best && cur && best.m.id !== cur.m.id && (training || best.s > cur.s * CONFIG.leadSwitchGain)) {
       const target = sendBtns.find((x) => norm(x.getAttribute('aria-label')).endsWith(norm(best.m.name)));
       if (target) {
         log(training ? mem.trainingNote ?? `🎓 ${best.m.name} mène pour l'XP` : `🔀 meneur : ${best.m.name} (${best.s.toFixed(2)}) au lieu de ${cur.m.name} (${cur.s.toFixed(2)})`);
+        mem.leadSwaps.n++; mem.leadSwaps.from.push(cur.m.id);
         target.click(); await sleep(350);
         return true;
       }
@@ -1663,11 +1672,17 @@
     return { carriers, kept, trainees };
   }
 
+  /** Meilleurs niveaux parmi l'équipe ET la Boîte (sans fossile) : liste stable quel que soit le contenu de l'équipe. */
+  const centerCandidates = (save) => [...teamMons(save), ...boxMons(save)].filter((m) => m.stats && !m.fossil).sort((a, b) => b.level - a.level || a.id.localeCompare(b.id)).slice(0, CONFIG.centerMaxBox + (Rt.D.config.maxTeamSize ?? 3));
   /* ── 6.5 Centre Pokémon : composition d'équipe + meneur ── */
   async function playCenter() {
     const save = readSave();
     const area = currentArea(save);
-    const prepBoss = bossPending(area, save) && !teamReadyForBoss(area, save, { quiet: true });
+    // Préparation du boss : tant que le boss de la zone attend, l'équipe se compose contre lui (pour s'entraîner, puis
+    // le défier). Décidé sur l'état de la zone, PAS sur l'équipe du moment : avant la v1.7.7, « l'équipe actuelle
+    // n'est pas prête » dépendait de qui était dedans → Leveinard dedans : prête → équipe XP → Leveinard sort →
+    // plus prête → préparation → Leveinard revient… (boucle signalée à la Caverne Azurée, boss Mewtwo)
+    const prepBoss = bossPending(area, save);
     const visit = `${save?.currentAreaId}|${save?.areaProgress?.[save.currentAreaId]?.round}|${save?.box.length}|${prepBoss}|${bossFails(area?.id)}`;
     if (!CONFIG.manageTeam || mem.centerDone === visit) return false;
     if (CONFIG.lockTeam) { mem.centerDone = visit; log('🔒 Centre : équipe verrouillée, aucun changement'); return false; }
@@ -1675,8 +1690,10 @@
     const bossThreats = bossTeam(area).map((b) => ({ ...b, weight: 1 }));
     const threats = compactThreats(prepBoss ? [...areaThreats(area), ...bossThreats.map((b) => ({ ...b, weight: 8 }))] : areaThreats(area));
     const team = teamMons(save);
-    // Boîte : seuls les meilleurs niveaux peuvent prétendre à une place → on borne le travail
-    const box = boxMons(save).filter((m) => m.stats && !m.fossil).sort((a, b) => b.level - a.level).slice(0, CONFIG.centerMaxBox);
+    // Candidats : l'équipe + les meilleurs niveaux de TOUT le monde (équipe comprise). Le classement ne dépend donc pas
+    // de qui est dans l'équipe : avant la v1.7.7, un Pokémon renvoyé en Boîte pouvait sortir du « top de la Boîte »,
+    // ne plus être évalué, puis y revenir dès qu'un autre sortait.
+    const box = centerCandidates(save).filter((m) => !team.some((t) => t.id === m.id));
     const all = [];
     const t0 = performance.now();
     for (const m of [...team, ...box]) {
@@ -1755,10 +1772,22 @@
     }
 
     // 1) Faire entrer un Pokémon de la Boîte s'il est meilleur
+    // Garde-fou : un Pokémon sorti il y a moins de 10 min ne revient pas, et au plus `size` échanges par passage
+    // (sinon deux Pokémon pouvaient s'échanger sans fin, le calcul changeant à chaque échange)
+    if (mem.centerSwaps?.visit !== visit) mem.centerSwaps = { visit, n: 0, out: mem.centerSwaps?.out?.filter((o) => Date.now() - o.at < 600000) ?? [] };
+    const recentlyOut = new Set(mem.centerSwaps.out.map((o) => o.id));
+    const blocked = want.find((m) => !teamIds.has(m.id) && recentlyOut.has(m.id));
+    if (blocked || mem.centerSwaps.n >= size) {
+      mem.centerDone = visit;
+      log(`⛔ Centre : équipe gardée${blocked ? ` (${blocked.name} vient d'être mis en Boîte, il ne revient pas tout de suite)` : ` (${mem.centerSwaps.n} échanges déjà faits)`} — boucle évitée`);
+      return false;
+    }
     const incoming = want.find((m) => !teamIds.has(m.id));
     if (incoming) {
       // Sort le plus faible de l'équipe qui n'est PAS dans l'équipe voulue (jamais le Pokémon en formation)
       const outgoing = [...team].filter((m) => !want.some((w) => w.id === m.id)).sort((a, b) => (all.find((x) => x.m.id === a.id)?.s ?? 0) - (all.find((x) => x.m.id === b.id)?.s ?? 0))[0];
+      mem.centerSwaps.n++;
+      if (outgoing) mem.centerSwaps.out.push({ id: outgoing.id, at: Date.now() });
       const card = $$('main button').find((x) => visible(x) && norm(x.innerText).startsWith(norm(incoming.name)) && x.innerText.includes(String(incoming.level)) && !teamCardIds().has(x));
       if (card) {
         card.click(); await sleep(500);
@@ -4198,7 +4227,7 @@
   }
 
   const api = { itemEvolutions, evolutionTargets, healTierFor, shopTiers, bot, CONFIG, MODES, DEFAULTS, setMode, setOption, resetOptions, setTeamLock, bossMatchup, bossTeam, journal, Rt, mem, readBattle, teamMons, boxMons,
-    upgradeCandidates, comboGains, catchScreenDex, captureParam, ballItemOf, upgradePick, xpShare, usefulXp, pickTrainees, catchOnlyDex, wildShare, dexWorthEvolving, dexUsefulEvolutions, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, battleItems, ensureRaidTeam, openRaids, nextRaid, playRaidPage, playCatch, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
+    upgradeCandidates, centerCandidates, comboGains, catchScreenDex, captureParam, ballItemOf, upgradePick, xpShare, usefulXp, pickTrainees, catchOnlyDex, wildShare, dexWorthEvolving, dexUsefulEvolutions, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, battleItems, ensureRaidTeam, openRaids, nextRaid, playRaidPage, playCatch, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
     areaThreats, missingSpecies, desiredArea, buildData, Engine,
     obtainedDex, fossilTargets, catchTargetDex, targetArea, wantLuck, canBreed, dayCarePick, dayCareDue, eventOpen, rebattleState, rebattleMatchup, rebattleDue,
     raidBossHp, raidOdds, raidTrainee, parseSchedule, scheduledMode, Stats, noteCatchResult, notify, WakeLock };

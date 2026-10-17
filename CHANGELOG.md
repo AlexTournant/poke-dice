@@ -6,6 +6,18 @@ Chaque section `## [X.Y.Z]` correspond à un tag `vX.Y.Z`. Les notes de la relea
 
 ## [Non publié]
 
+## [1.7.7]
+
+### Corrigé
+
+- Centre : le bot échangeait sans fin deux Pokémon (signalé à la Caverne Azurée : Leveinard ↔ Grolem, puis Leveinard ↔ Ronflex). Deux calculs dépendaient de l'équipe du moment :
+  - la préparation du boss (Mewtwo) ne se déclenchait que si l'équipe **actuelle** n'était pas prête. Leveinard dedans : équipe prête, équipe XP, Leveinard sort ; plus prête, préparation, Leveinard revient… Désormais, tant que le boss de la zone attend, l'équipe se compose contre lui ;
+  - seuls les meilleurs niveaux **de la Boîte** étaient évalués : un Pokémon renvoyé en Boîte pouvait sortir de cette liste, puis y revenir. Les candidats sont maintenant les meilleurs niveaux de l'équipe et de la Boîte réunies.
+- Garde-fous en plus, contre toute autre boucle d'échange :
+  - avant un combat, au plus 2 changements de meneur par rencontre, et jamais pour remettre un Pokémon qu'on vient de remplacer ;
+  - au Centre, un Pokémon mis en Boîte depuis moins de 10 minutes ne revient pas, et au plus 3 échanges par passage.
+  Chaque garde-fou écrit une ligne « ⛔ … boucle évitée » dans le journal.
+
 ## [1.7.6]
 
 ### Corrigé
