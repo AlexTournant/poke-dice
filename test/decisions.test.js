@@ -1198,3 +1198,44 @@ test('Régions : une Revanche « prête » ne retient plus le départ en Progres
     assert.match(P.regionSwitchStatus(save).why, /désactivé/, 'la raison est expliquée');
   } finally { P.setOption('autoRegion', true, { persist: false }); delete P.Rt.D.config.events; delete P.Rt.D.config.rebattleLineups; }
 });
+
+test('Raids : ouverts comme le jeu — espèce déjà vue mais boss pas battu sur place, zone portail', () => {
+  const save = setup({ box: [['a', 999, 60]], team: ['a'], pokedex: [999, 26] });
+  const cave = P.Rt.D.areas.cave;
+  P.Rt.D.config.events = { raid: { access: 'all' } };
+  try {
+    save.areaProgress.cave = { cleared: true, bossesDefeated: [] };
+    assert.equal(P.raidStatus(save, cave, { dex: 26 }), 'open', 'Raichu déjà au Pokédex, mais pas battu dans la grotte : ouvert (comme le jeu)');
+    P.setOption('raidOnlyMissing', true, { persist: false });
+    assert.equal(P.legendaryRaids(save).length, 0, 'écarté en automatique (réglage espèces manquantes)');
+    assert.equal(P.legendaryRaids(save, { all: true }).length, 1, 'mais listé dans le panneau, et faisable si on le choisit');
+    P.setOption('raidTarget', 'cave/26', { persist: false });
+    assert.equal(P.nextRaid(save)?.key, 'cave/26', 'choisi explicitement : il est fait');
+    P.setOption('raidTarget', '', { persist: false });
+    save.areaProgress.cave.bossesDefeated = [26];
+    assert.equal(P.raidStatus(save, cave, { dex: 26 }), 'done', 'battu sur place et au Pokédex : fait');
+    const portal = { id: 'p1', mode: 'portal', legendaryBoss: [{ dex: 26, raid: true }] };
+    save.areaProgress.p1 = { cleared: false, portal: { won: true } };
+    assert.equal(P.raidStatus(save, portal, { dex: 26 }), 'open', 'zone portail gagnée : ouvert même sans « zone terminée »');
+  } finally { P.setOption('raidTarget', '', { persist: false }); delete P.Rt.D.config.events; }
+});
+
+test('Régions : la fenêtre du partenaire est trouvée même par-dessus la liste des Zones', async () => {
+  setup({ box: [['a', 999, 60]], team: ['a'], pokedex: [999] });
+  P.Rt.D.regions.johto = { id: 'johto', name: 'Johto', orderIndex: 1, dexRange: [152, 251], starters: [152, 155, 158], enabled: true };
+  for (const [dex, name] of [[152, 'Germignon'], [155, 'Héricendre'], [158, 'Kaiminus']]) { addMon(dex, name, 'normal', 250); P.Rt.frNameToDex.set(name.toUpperCase(), dex); }
+  for (const [k, v] of [['ui.partner.label', 'Choisis ton partenaire à {region}'], ['ui.partner.ball', 'Poké Ball {n} sur 3']]) P.Rt.i18n.set(k, v);
+  P.setOption('starterPick.johto', 155, { persist: false });
+  const balls = [1, 2, 3].map((n) => fakeEl({ attrs: { 'aria-label': `Poké Ball ${n} sur 3` } }));
+  const zones = fakeEl({ attrs: { role: 'dialog', 'aria-label': 'Zones' } });
+  const partner = fakeEl({ attrs: { role: 'dialog', 'aria-label': 'Choisis ton partenaire à Johto' } });
+  partner.querySelectorAll = (sel) => (sel === 'button[aria-label]' ? balls : sel.startsWith('button') ? balls : []);
+  const before = document.querySelectorAll;
+  document.querySelectorAll = (sel) => (sel === '[role=dialog]' ? [zones, partner] : sel.startsWith('button') ? balls : []);
+  P.mem.regionGo = P.Rt.D.regions.johto;
+  try {
+    assert.equal(P.partnerDialog(), partner, 'la fenêtre du partenaire, pas celle des Zones');
+    await P.playPartner(P.partnerDialog());
+    assert.equal(balls[1].clicks, 1, 'Poké Ball 2 = Héricendre');
+  } finally { document.querySelectorAll = before; P.Rt.i18n.clear(); P.Rt.frNameToDex.clear(); P.setOption('starterPick.johto', '', { persist: false }); P.mem.regionGo = null; }
+});

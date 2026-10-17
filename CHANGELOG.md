@@ -6,6 +6,17 @@ Chaque section `## [X.Y.Z]` correspond à un tag `vX.Y.Z`. Les notes de la relea
 
 ## [Non publié]
 
+## [1.11.1]
+
+### Corrigé
+
+- Raids : des raids légendaires ouverts dans le jeu n'étaient pas vus. Le bot les décide maintenant comme le jeu :
+  - une espèce déjà au Pokédex garde son raid ouvert tant que le boss n'a pas été battu dans cette zone ;
+  - le raid d'une zone portail / cauchemar s'ouvre quand elle est gagnée ;
+  - « boss battu » ne compte plus comme « zone terminée ».
+- Raids : avec « Seulement les espèces pas encore au Pokédex », un raid d'espèce déjà vue est écarté en automatique, mais il reste listé dans le panneau et se fait si on le choisit. Le journal explique pourquoi aucun raid n'est lancé (plafond d'essais, arrêt du jour, espèce déjà vue…).
+- Changement de région : le choix du partenaire ne se faisait pas quand sa fenêtre s'ouvrait par-dessus la liste des Zones. Le bot regardait la première fenêtre ouverte. Il cherche maintenant celle du partenaire parmi toutes.
+
 ## [1.11.0]
 
 ### Modifié

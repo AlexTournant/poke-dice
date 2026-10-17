@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pokédice Autopilot
 // @namespace    pokedice-bot
-// @version      1.11.0
+// @version      1.11.1
 // @description  Joue à Pokédice — modes Progression / Pokédex / Farm / Versus / Raids : combats optimisés, soins, captures, boutique, améliorations, Centre, zones.
 // @match        https://poke-dice.netlify.app/*
 // @grant        none
@@ -2394,26 +2394,46 @@
     return !c.unlockAreaId || !!(p?.cleared || p?.bossDefeated);
   };
   /** Raids légendaires ouverts (zone terminée) et pas encore capturés. */
-  function legendaryRaids(save = readSave()) {
-    const caught = new Set(save?.pokedex ?? []);
+  /**
+   * État d'un raid légendaire, comme le jeu (im) : « done » s'il est noté fait (events.raidsDone, clé « zone:dex ») ou si
+   * le boss a été battu DANS cette zone et l'espèce est au Pokédex ; zone portail / cauchemar : ouvert quand il est
+   * gagné ; sinon ouvert quand la zone est terminée. Avant la v1.11.1, le bot écartait tout raid d'une espèce déjà au
+   * Pokédex (le jeu le laisse ouvert tant que le boss n'est pas battu sur place) et ignorait les raids des portails.
+   */
+  function raidStatus(save, area, boss) {
+    if (save?.events?.raidsDone?.includes(`${area.id}:${boss.dex}`)) return 'done';
+    const p = save?.areaProgress?.[area.id];
+    if (area.mode && (p?.portal || p?.nightmare)) return p.portal?.won || p.nightmare?.won ? 'open' : 'locked';
+    if (p?.bossesDefeated?.includes(boss.dex) && (save?.pokedex ?? []).includes(boss.dex)) return 'done';
+    return p?.cleared ? 'open' : 'locked';
+  }
+  /**
+   * Raids légendaires ouverts (région courante).
+   * @param {{all?:boolean}} [o]  all : aussi ceux d'espèces déjà au Pokédex (sinon écartés si raidOnlyMissing)
+   */
+  function legendaryRaids(save = readSave(), { all = false } = {}) {
+    const c = raidCfg();
+    if (c?.access && c.access !== 'all') return [];
+    const caughtSet = new Set(save?.pokedex ?? []);
+    const region = save?.region ?? regionId(save);
     const out = [];
     for (const a of Rt.D.areaList) {
-      const p = save?.areaProgress?.[a.id];
-      if (!(p?.cleared || p?.bossDefeated)) continue;
+      if (a.regionId && region && a.regionId !== region) continue;
       for (const b of a.legendaryBoss ?? []) {
-        // fait = déjà capturé, ou noté par le jeu dans events.raidsDone (clé « zone:dex »)
-        if (!b.raid || caught.has(b.dex) || save?.events?.raidsDone?.includes(`${a.id}:${b.dex}`)) continue;
-        out.push({ areaId: a.id, dex: b.dex, level: b.level, path: `/raid/${a.id}/${b.dex}`, key: `${a.id}/${b.dex}` });
+        if (!b.raid || raidStatus(save, a, b) !== 'open') continue;
+        const caught = caughtSet.has(b.dex);
+        if (caught && CONFIG.raidOnlyMissing && !all) continue;
+        out.push({ areaId: a.id, dex: b.dex, level: b.level, path: `/raid/${a.id}/${b.dex}`, key: `${a.id}/${b.dex}`, caught });
       }
     }
     return out;
   }
   /** Raids ouverts que le bot peut faire (raid du jour d'abord), sans tenir compte des essais. */
-  function openRaids(save = readSave()) {
+  function openRaids(save = readSave(), { all = false } = {}) {
     const st = actState();
     const out = [];
     if (dailyRaidOpen(save) && st.raidDone !== utcDay()) out.push({ key: 'daily', path: '/events/raid', label: 'Raid du jour' });
-    for (const r of legendaryRaids(save)) out.push({ ...r, label: `${Rt.nameOf(r.dex)} · ${Rt.areaLabel(Rt.D.areas[r.areaId])}` });
+    for (const r of legendaryRaids(save, { all })) out.push({ ...r, label: `${Rt.nameOf(r.dex)} · ${Rt.areaLabel(Rt.D.areas[r.areaId])}${r.caught ? ' (déjà au Pokédex)' : ''}` });
     return out;
   }
   /**
@@ -2428,7 +2448,7 @@
     const ok = (r) => (CONFIG.raidLoop || (tries.n[r.key] ?? 0) < CONFIG.raidMaxTries) && (CONFIG.raidLoop || !(st.raidSkip?.[r.key] > Date.now()));
     const open = openRaids(save);
     if (CONFIG.raidTarget) {
-      const t = open.find((r) => r.key === CONFIG.raidTarget);
+      const t = openRaids(save, { all: true }).find((r) => r.key === CONFIG.raidTarget);
       if (t) return ok(t) ? t : null;
       if (mem.raidTargetLog !== CONFIG.raidTarget) { mem.raidTargetLog = CONFIG.raidTarget; log('🐉 Raid choisi indisponible (capturé, fait ou fermé) : retour au choix automatique'); }
     }
@@ -2708,7 +2728,13 @@
       const r = nextRaid(save);
       if (!r) {
         const c = raidCfg();
-        const why = !dailyRaidOpen(save) ? `raid du jour verrouillé (termine ${Rt.areaLabel(Rt.D.areas[c?.unlockAreaId])})` : 'raids du jour faits';
+        const allOpen = openRaids(save, { all: true });
+        const day = utcDay(), tries = st.raidTries?.day === day ? st.raidTries.n : {};
+        const capped = allOpen.filter((x) => !CONFIG.raidLoop && ((tries[x.key] ?? 0) >= CONFIG.raidMaxTries || st.raidSkip?.[x.key] > Date.now()));
+        const known = allOpen.filter((x) => x.caught && CONFIG.raidOnlyMissing);
+        const why = allOpen.length
+          ? `${allOpen.length} raid(s) ouvert(s) mais ${[capped.length && `${capped.length} au plafond d'essais / arrêté(s) pour aujourd'hui`, known.length && `${known.length} d'espèce déjà au Pokédex (réglage)`].filter(Boolean).join(', ') || 'non autorisé(s) (réglages Raid du jour / Raids légendaires)'}`
+          : !dailyRaidOpen(save) ? `raid du jour verrouillé (termine ${Rt.areaLabel(Rt.D.areas[c?.unlockAreaId])})` : 'raids du jour faits';
         actLog('raid', `🔒 Raids : ${why} — le bot joue en ${MODES[CONFIG.mode].label} en attendant`);
         return false;
       }
@@ -3906,6 +3932,7 @@
     const next = mem.regionGo ?? regionSwitchDue(save);
     if (!next) return false;
     if (!mem.regionGo) { mem.regionGo = next; mem.regionTries = 0; log(`🧭 ${Rt.D.regions[save?.region]?.name ?? 'région'} terminée → cap sur ${next.name} (partenaire : ${Rt.nameOf(starterFor(next.id))})`); }
+    if (partnerDialog()) return false; // l'écran du partenaire est traité par la boucle
     if (++mem.regionTries > 25) { log(`⚠️ changement de région vers ${next.name} impossible pour l'instant — fais-le à la main (Zones → Régions)`); mem.regionFail = true; mem.regionGo = null; return false; }
     const d = dialog();
     const step = btn('ui.region.goTo', { scope: d ?? document }) ?? btn('ui.partner.enter') ?? btn('ui.region.see');
@@ -3920,6 +3947,7 @@
     return false;
   }
 
+  const partnerDialog = () => $$('[role=dialog]').find((d) => visible(d) && Rt.re('ui.partner.label').test(norm(d.getAttribute('aria-label')))) ?? null;
   /** Écran « Choisis ton partenaire » : la Poké Ball du starter voulu, « Choisir », puis « C'est parti ! ». */
   async function playPartner(d) {
     const label = norm(d.getAttribute('aria-label'));
@@ -3990,7 +4018,8 @@
           }
         }
 
-        if (!acted) { const d = dialog(); if (d && Rt.re('ui.partner.label').test(norm(d.getAttribute('aria-label')))) { where = 'partner'; acted = await playPartner(d); } }
+        // Choix du partenaire : sa fenêtre peut s'ouvrir PAR-DESSUS la liste des Zones (deux fenêtres) — on la cherche parmi toutes
+        if (!acted) { const d = partnerDialog(); if (d) { where = 'partner'; acted = await playPartner(d); } }
         if (!acted && mem.errand === 'rebattle' && playRebattleEnd()) { acted = true; where = 'rebattle'; }
         if (!acted && bodyHas('ui.wipe.title')) { const r = btn('ui.wipe.tryAgain'); if (r) { settleBossFight(true); log('💀 équipe K.O. → réessayer'); r.click(); acted = true; } }
 
@@ -4476,11 +4505,12 @@
       const r = save ? nextRaid(save) : null;
       const raidSel = h('select', { onchange: () => { setOption('raidTarget', raidSel.value); mem.raidTargetLog = null; this.renderPanel(); } });
       raidSel.add(new Option('Automatique (tous, raid du jour d’abord)', '', false, !CONFIG.raidTarget));
-      for (const o of save ? openRaids(save) : []) raidSel.add(new Option(o.label, o.key, false, o.key === CONFIG.raidTarget));
+      for (const o of save ? openRaids(save, { all: true }) : []) raidSel.add(new Option(o.label, o.key, false, o.key === CONFIG.raidTarget));
       if (CONFIG.raidTarget && ![...raidSel.options].some((o) => o.value === CONFIG.raidTarget)) raidSel.add(new Option(`${CONFIG.raidTarget} (indisponible)`, CONFIG.raidTarget, false, true));
       return [
         h('h4', {}, 'Raid à lancer'),
-        h('label', { className: 'f', title: 'Le mode Raids va sur ce raid ; « Automatique » enchaîne tous les raids autorisés.' }, h('span', {}, `Raids ouverts (${save ? openRaids(save).length : 0})`), raidSel),
+        h('label', { className: 'f', title: 'Le mode Raids va sur ce raid ; « Automatique » enchaîne tous les raids autorisés.' }, h('span', {}, `Raids ouverts (${save ? openRaids(save, { all: true }).length : 0})`), raidSel),
+        (() => { const skipped = save ? openRaids(save, { all: true }).filter((r) => r.caught && CONFIG.raidOnlyMissing) : []; return skipped.length ? h('div', { className: 'muted' }, `Ignorés en automatique (espèce déjà au Pokédex, réglage « Seulement les espèces pas encore au Pokédex ») : ${skipped.map((r) => Rt.nameOf(r.dex)).join(', ')} — choisis-les ci-dessus pour les faire quand même.`) : null; })(),
         h('h4', {}, 'État'),
         h('table', {},
           h('tr', {}, h('td', {}, 'Versus'), h('td', { className: 'n' }, n50 >= 3 ? `ouvert · ${st.vsWins ?? 0}/${st.vsFights ?? 0} victoires` : `verrouillé (${n50}/3 au N.50)`)),
@@ -4609,7 +4639,7 @@
   }
 
   const api = { itemEvolutions, evolutionTargets, healTierFor, shopTiers, bot, CONFIG, MODES, DEFAULTS, setMode, setOption, resetOptions, setTeamLock, bossMatchup, bossTeam, journal, Rt, mem, readBattle, teamMons, boxMons,
-    upgradeCandidates, rebattleThreats, bestTeamVs, rebattlePlan, starterFor, newRegionOpen, regionSwitchDue, regionSwitchStatus, regionTick, playPartner, stoneNeeds, stoneGoldShortfall, consumablesReserve, centerCandidates, comboGains, catchScreenDex, captureParam, ballItemOf, upgradePick, xpShare, usefulXp, pickTrainees, catchOnlyDex, wildShare, dexWorthEvolving, dexUsefulEvolutions, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, rebattleActivity, simulateGauntlet, bestGauntletTeam, rebattleUpgrade, battleItems, ensureRaidTeam, openRaids, nextRaid, playRaidPage, playCatch, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
+    upgradeCandidates, rebattleThreats, bestTeamVs, rebattlePlan, starterFor, newRegionOpen, regionSwitchDue, regionSwitchStatus, partnerDialog, regionTick, playPartner, stoneNeeds, stoneGoldShortfall, consumablesReserve, centerCandidates, comboGains, catchScreenDex, captureParam, ballItemOf, upgradePick, xpShare, usefulXp, pickTrainees, catchOnlyDex, wildShare, dexWorthEvolving, dexUsefulEvolutions, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, raidStatus, rebattleActivity, simulateGauntlet, bestGauntletTeam, rebattleUpgrade, battleItems, ensureRaidTeam, openRaids, nextRaid, playRaidPage, playCatch, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
     areaThreats, missingSpecies, desiredArea, buildData, Engine,
     obtainedDex, fossilTargets, catchTargetDex, targetArea, wantLuck, canBreed, dayCarePick, dayCareDue, eventOpen, rebattleState, rebattleMatchup, rebattleDue,
     raidBossHp, raidOdds, raidTrainee, parseSchedule, scheduledMode, Stats, noteCatchResult, notify, WakeLock };
