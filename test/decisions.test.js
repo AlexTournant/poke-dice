@@ -981,3 +981,15 @@ test('Capture : l’écran « Presque ! Lancer un Appât ? » est traité (plus 
     assert.equal(keep.clicks, 0);
   } finally { P.Rt.i18n.clear(); P.Rt.frNameToDex.clear(); P.mem.rare = null; P.mem.fightKind = null; P.setMode('progression', { persist: false }); }
 });
+
+test('Revente : jamais le meilleur soin en vente, même devenu faible face à une équipe N.100', () => {
+  P.setMode('progression', { persist: false });
+  // Mur N.100 : 900 PV → l'Hyper Potion (120) rend moins de 20 % des PV, mais c'est le meilleur soin en vente
+  const save = setup({ box: [['a', 999, 100]], team: ['a'], pokedex: [999], badges: 4, gold: 5000, inventory: { 'hyper-potion': 6, potion: 9, 'poke-ball': 30, 'ultra-ball': 5 } });
+  addMon(7501, 'Mur', 'normal', 900); save.box[0].dex = 7501;
+  const sells = P.sellList(save).map((x) => x.key);
+  assert.ok(!sells.includes('hyper-potion'), 'l’Hyper Potion n’est pas revendue : ' + sells);
+  assert.ok(sells.includes('potion'), 'la Potion (20 PV, plus faible que le palier acheté) part bien');
+  const buys = P.shopWishlist(save).map((x) => x.key);
+  assert.ok(!sells.some((k) => buys.includes(k)), 'rien n’est à la fois vendu et acheté');
+});
