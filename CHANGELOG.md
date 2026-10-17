@@ -6,6 +6,17 @@ Chaque section `## [X.Y.Z]` correspond à un tag `vX.Y.Z`. Les notes de la relea
 
 ## [Non publié]
 
+## [1.11.0]
+
+### Modifié
+
+- Revanche du Conseil 4 : l'équipe est choisie en **simulant toute la série**. Les dresseurs passent dans l'ordre, les PV de l'équipe ne remontent pas d'un combat à l'autre, et contre chaque Pokémon adverse on envoie celui qui le bat en gardant le plus de PV. Les 10 meilleurs candidats sont combinés par 3 (120 équipes) : on garde celle qui bat le plus d'adversaires, puis celle qui finit avec le plus de PV. La revanche n'est lancée que si la série simulée est gagnée avec au moins `rebattleHpMargin` (15 %) des PV ; sinon, l'équipe s'entraîne dans le mode de repli et le journal dit sur quel adversaire elle bloque.
+
+### Corrigé
+
+- Revanche : la série était préparée contre **tous** les Rivaux du palier. Comme le jeu, le bot ne garde que celui qui correspond à ton starter.
+- Revanche : améliorations adverses calculées comme le jeu (niveau propre du dresseur tel quel, sinon zone de la Ligue + bonus du palier, « max » = 10). En combat, le bot s'en sert aussi pour soigner, relancer, choisir le meneur et changer de Pokémon.
+
 ## [1.10.0]
 
 ### Ajouté

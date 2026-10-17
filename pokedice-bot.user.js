@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pokédice Autopilot
 // @namespace    pokedice-bot
-// @version      1.10.0
+// @version      1.11.0
 // @description  Joue à Pokédice — modes Progression / Pokédex / Farm / Versus / Raids : combats optimisés, soins, captures, boutique, améliorations, Centre, zones.
 // @match        https://poke-dice.netlify.app/*
 // @grant        none
@@ -175,7 +175,8 @@
     // Événements et routines (tous modes)
     eventWheel: true,             // Roue de la fortune : un tour gratuit par jour
     rebattle: true,               // Revanche du Conseil 4 : le Centre compose l'équipe qui bat tout le palier, puis enchaîne les 5 combats
-    rebattleReadyScore: 1.4,      // ↳ duel moyen exigé contre les équipes du palier
+    rebattleReadyScore: 1.4,      // ↳ (ancien critère, remplacé par la simulation de la série)
+    rebattleHpMargin: 0.15,       // ↳ la série simulée doit être gagnée avec au moins 15 % des PV de l'équipe restants
     rebattleMaxTries: 3,          // ↳ défaites par jour avant d'attendre le lendemain
     dayCare: true,                // Pension : fait éclore les Œufs et y laisse un couple de la Boîte (Œufs : espèces absentes ×4)
     dayCareCheckMin: 20,          // ↳ passe à la Pension au plus toutes les N minutes (sauf Œuf qui attend)
@@ -690,6 +691,15 @@
   const wildDexes = (area) => [...new Set((area?.wildPool ?? []).filter((w) => (w.weight ?? 1) > 0).map((w) => w.dex))].filter((d) => Rt.D.species[d]);
   const currentArea = (save = readSave()) => Rt.D.areas[save?.currentAreaId] ?? null;
   const enemyLevels = (area) => Rt.E.allLevels(area?.enemyUpgradeLevel ?? Rt.D.config.enemyUpgradeLevel ?? 1);
+  /** Améliorations de l'adversaire en combat : celles du dresseur de la revanche en cours, sinon celles de la zone. */
+  function battleFoeLevels(area) {
+    if (mem.errand === 'rebattle') {
+      const rb = rebattleState();
+      const tr = rb?.trainers[Math.min(rb.step, rb.trainers.length - 1)];
+      if (tr) return Rt.E.allLevels(rebattleUpgrade(rb, tr));
+    }
+    return enemyLevels(area);
+  }
 
   /** Espèces probables d'une zone (pondérées), pour le Centre et les leads "à l'aveugle". */
   function areaThreats(area) {
@@ -770,7 +780,7 @@
   function scoreVsThreats(mon, threats, area) {
     if (!mon.stats) return 0;
     if (!threats.length) return mon.level;
-    const lv = enemyLevels(area);
+    const lv = battleFoeLevels(area);
     let s = 0, w = 0;
     for (const th of threats) {
       const st = th.stats ?? Rt.E.speciesAt(th.dex, th.level);
@@ -842,7 +852,7 @@
     const levels = raid ? raidSideLevels() : { comboLevels: save?.comboLevels ?? {}, dieLevels: save?.dieLevels ?? {} };
     const foeMax = foeStats?.maxHp ? Math.round(foeStats.maxHp * (raid ? raidCfg()?.barHp ?? 1 : 1)) : null;
     const foeHp = foeMax ? Math.max(1, Math.ceil(foeMax * foePct / 100)) : Infinity;
-    const foeExpDmg = foeStats && myStats ? Rt.E.avgDamage(foeStats.dice, { attackerTypes: foeStats.types, defTypes: myStats.types, levels: raid ? raidBossLevels() : enemyLevels(area) }) : 0.15 * myMax;
+    const foeExpDmg = foeStats && myStats ? Rt.E.avgDamage(foeStats.dice, { attackerTypes: foeStats.types, defTypes: myStats.types, levels: raid ? raidBossLevels() : battleFoeLevels(area) }) : 0.15 * myMax;
     const myExpDmg = myStats ? Rt.E.avgDamage(myStats.dice, { attackerTypes: myStats.types, defTypes: foeTypes, levels }) : 5;
 
     return {
@@ -1003,7 +1013,7 @@
     if (!Rt.D.config.allowVoluntarySwitch || !b.ctx.foe.stats || !b.ctx.me.stats) return null;
     const key = `${b.ctx.foe.dex}@${b.ctx.foe.maxHp}`;
     if (mem.switchedFor === key) return null;
-    const foe = { stats: b.ctx.foe.stats, hp: b.ctx.foe.hp, levels: enemyLevels(currentArea()) };
+    const foe = { stats: b.ctx.foe.stats, hp: b.ctx.foe.hp, levels: battleFoeLevels(currentArea()) };
     const team = teamMons();
     const cur = team.find((m) => norm(m.name) === norm(b.ctx.me.name));
     if (!cur) return null;
@@ -1172,7 +1182,7 @@
 
     const team = teamMons(save).filter((m) => m.hp > 0 && m.stats);
     const foe = encounterFoe();
-    const lv = enemyLevels(area);
+    const lv = battleFoeLevels(area);
     const threats = foe ? [{ dex: foe.dex, level: foe.level, weight: 1 }] : compactThreats(areaThreats(area));
     const scored = team.map((m) => ({ m, s: foe?.stats
       ? Rt.E.duelScore({ stats: m.stats, hp: m.hp, levels: m.levels }, { stats: foe.stats, hp: foe.stats.maxHp, levels: lv }).score
@@ -1823,7 +1833,7 @@
       want.splice(0, want.length, ...rbp.team);
       mem.xpTrainees = []; mem.trainee = null;
       const sig = `${rbp.rb.tier.id}|${rbp.team.map((m) => m.id).join(',')}`;
-      if (mem.rbTeamLog !== sig) { mem.rbTeamLog = sig; log(`🏅 Revanche ${rbp.rb.tier.id} : équipe ${rbp.team.map((m) => `${m.name} N.${m.level}`).join(' + ')} (duel moyen ${rbp.avg.toFixed(2)}, pire ${rbp.worst.toFixed(2)} contre les ${rebattleThreats(rbp.rb).length} Pokémon du palier)`); }
+      if (mem.rbTeamLog !== sig) { mem.rbTeamLog = sig; log(`🏅 Revanche ${rbp.rb.tier.id} : équipe ${rbp.team.map((m) => `${m.name} N.${m.level}`).join(' + ')} — série simulée : ${rbp.wins ? `gagnée avec ${Math.round(rbp.hpLeft * 100)} % des PV` : `${rbp.beaten}/${rbp.total} adversaires battus${rbp.stuckOn ? ', bloquée sur ' + rbp.stuckOn : ''}`}`); }
     }
 
     // 1) Faire entrer un Pokémon de la Boîte s'il est meilleur
@@ -2729,7 +2739,11 @@
         actLog('rb', `🏅 Revanche ${rb.tier.id} : équipe ${plan.team.map((m) => m.name).join(' + ')} en préparation au prochain Centre`);
         return false;
       }
-      if (plan && !plan.ready) actLog('rbw', `🏅 Revanche ${rb.tier.id} : meilleure équipe possible (duel moyen ${plan.avg.toFixed(2)}, pire ${plan.worst.toFixed(2)}) — on tente`);
+      // On ne lance que si la série simulée est gagnée : sinon l'équipe s'entraîne dans le mode de repli
+      if (!plan || !plan.ready) {
+        actLog('rb', `🏅 Revanche ${rb.tier.id} : pas encore gagnable${plan ? ` — meilleure équipe ${plan.team.map((m) => `${m.name} N.${m.level}`).join(' + ')} bat ${plan.beaten}/${plan.total} adversaires en simulation${plan.stuckOn ? ', bloquée sur ' + plan.stuckOn : ''}` : ''} → entraînement en ${fb}`);
+        return false;
+      }
     }
     mem.errand = 'rebattle'; mem.errandAt = Date.now();
     log(`🏅 Revanche du Conseil 4 : palier ${rb.tier.id}${rb.step ? `, combat ${rb.step + 1}` : ''} — on y va`);
@@ -2766,7 +2780,23 @@
     const st = save?.events?.rebattle?.[region] ?? { done: 0, step: 0 };
     if (st.done >= tiers.length) return null;
     const tier = tiers[st.done];
-    return { region, tier, step: st.step ?? 0, trainers: lineups[tier.id].map((id) => Rt.D.trainers[id]).filter(Boolean) };
+    // Comme le jeu (cp) : un seul Rival, celui qui correspond au starter (1re espèce du Pokédex), sinon le premier
+    const ids = lineups[tier.id];
+    const rivals = ids.filter((id) => Rt.D.trainers[id]?.rivalOf != null);
+    const starter = save?.pokedex?.[0] ?? null;
+    const rival = rivals.find((id) => Rt.D.trainers[id].rivalOf === starter) ?? rivals[0];
+    const trainers = ids.filter((id) => !rivals.includes(id) || id === rival).map((id) => Rt.D.trainers[id]).filter((t) => t?.team?.length);
+    return { region, tier, step: st.step ?? 0, trainers, leagueAreaId: reg.leagueAreaId };
+  }
+  /**
+   * Améliorations d'un dresseur de la revanche (port de Fte) : son propre upgradeLevel s'il en a un ; sinon celui de
+   * la zone de la Ligue (ou du jeu) + upgradeDelta du palier ; « max » = 10. Borné entre 1 et 10.
+   */
+  function rebattleUpgrade(rb, tr) {
+    if (tr.upgradeLevel != null) return tr.upgradeLevel;
+    if (rb.tier.upgradeDelta === 'max') return 10;
+    const base = Rt.D.areas[rb.leagueAreaId]?.enemyUpgradeLevel ?? Rt.D.config.enemyUpgradeLevel ?? 1;
+    return clamp(base + (+rb.tier.upgradeDelta || 0), 1, 10);
   }
   /** Duels de l'équipe contre les Pokémon restants du palier (améliorations adverses + upgradeDelta, "max" = niveau max). */
   function rebattleMatchup(rb, mons) {
@@ -2791,10 +2821,10 @@
     if (st.rebattleFails?.day === utcDay() && st.rebattleFails.n >= CONFIG.rebattleMaxTries) return false;
     const rb = rebattleState(save);
     if (!rb) return false;
-    const mu = rebattleMatchup(rb, teamMons(save));
-    const ok = !!mu && mu.avg >= CONFIG.rebattleReadyScore && mu.worst >= CONFIG.bossWorstScore;
+    const sim = simulateGauntlet(teamMons(save), rebattleThreats(rb));
+    const ok = sim.wins && sim.hpLeft >= CONFIG.rebattleHpMargin;
     const sig = `${rb.tier.id}|${ok}`;
-    if (mem.rebattleSig !== sig) { mem.rebattleSig = sig; log(ok ? `🏅 Revanche ${rb.tier.id} : équipe prête (duel moyen ${mu.avg.toFixed(2)})` : `🏅 Revanche ${rb.tier.id} : pas encore (duel moyen ${mu ? mu.avg.toFixed(2) : '?'} / ${CONFIG.rebattleReadyScore})`); }
+    if (mem.rebattleSig !== sig) { mem.rebattleSig = sig; log(ok ? `🏅 Revanche ${rb.tier.id} : équipe prête (série simulée gagnée, ${Math.round(sim.hpLeft * 100)} % des PV restants)` : `🏅 Revanche ${rb.tier.id} : pas encore (${sim.beaten}/${sim.total} adversaires battus en simulation${sim.stuckOn ? ', bloqué sur ' + sim.stuckOn : ''})`); }
     return ok;
   }
   function noteRebattleLoss() {
@@ -3693,14 +3723,79 @@
    * avec leurs améliorations (niveau du dresseur + upgradeDelta du palier, « max » = niveau maximum).
    */
   function rebattleThreats(rb) {
-    const maxUp = Math.max(1, ...Object.values(Rt.D.comboUp).map((l) => l.length));
     const out = [];
-    for (const tr of rb.trainers.slice(rb.step)) for (const tm of tr.team ?? []) {
-      const base = tr.upgradeLevel ?? Rt.D.config.enemyUpgradeLevel ?? 1;
-      const up = rb.tier.upgradeDelta === 'max' ? maxUp : Math.min(maxUp, base + (+rb.tier.upgradeDelta || 0));
-      if (Rt.D.species[tm.dex]) out.push({ dex: tm.dex, level: tm.level ?? 50, levels: Rt.E.allLevels(up), trainer: tr.name });
+    for (const tr of rb.trainers.slice(rb.step)) {
+      const levels = Rt.E.allLevels(rebattleUpgrade(rb, tr));
+      for (const tm of tr.team ?? []) if (Rt.D.species[tm.dex]) out.push({ dex: tm.dex, level: tm.level ?? 50, levels, trainer: tr.name });
     }
     return out;
+  }
+
+  /**
+   * Simulation de la série (espérance, déterministe) : les adversaires passent dans l'ordre, les PV de NOTRE équipe ne
+   * remontent pas d'un combat à l'autre (pas de Centre). Contre chaque Pokémon adverse, on envoie celui des nôtres qui
+   * le bat en gardant le plus de PV (comme le bot qui change de Pokémon en combat), sinon celui qui lui fait le plus mal.
+   * Nous frappons en premier à chaque tour. Les soins ne sont pas comptés : marge de sécurité.
+   * @param {{stats, maxHp, levels, name}[]} team
+   * @returns {{wins:boolean, beaten:number, total:number, hpLeft:number, stuckOn:string|null}}
+   */
+  function simulateGauntlet(team, threats) {
+    const ours = team.filter((m) => m.stats).map((m) => ({ m, hp: m.maxHp || m.stats.maxHp }));
+    const total = threats.length;
+    const dmgCache = new Map();
+    const dmg = (att, attLv, def) => {
+      const k = `${att.dex}@${att.level}|${JSON.stringify(attLv)}>${def.dex}`;
+      if (!dmgCache.has(k)) dmgCache.set(k, Math.max(0.1, Rt.E.avgDamage(att.dice, { attackerTypes: att.types, defTypes: def.types, levels: attLv })));
+      return dmgCache.get(k);
+    };
+    let beaten = 0;
+    for (const th of threats) {
+      const st = Rt.E.speciesAt(th.dex, th.level);
+      if (!st) { beaten++; continue; }
+      let foeHp = st.maxHp;
+      while (foeHp > 0) {
+        const alive = ours.filter((o) => o.hp > 0);
+        if (!alive.length) return { wins: false, beaten, total, hpLeft: 0, stuckOn: `${Rt.nameOf(th.dex)} N.${th.level}${th.trainer ? ' (' + th.trainer + ')' : ''}` };
+        const plans = alive.map((o) => {
+          const my = dmg(o.m.stats, o.m.levels, st), its = dmg(st, th.levels, o.m.stats);
+          const tK = Math.ceil(foeHp / my), tD = Math.ceil(o.hp / its);
+          return { o, my, its, tK, tD, win: tK <= tD, left: o.hp - (tK - 1) * its };
+        });
+        const winners = plans.filter((x) => x.win).sort((a, b) => b.left - a.left);
+        const p = winners[0] ?? plans.sort((a, b) => b.tD * b.my - a.tD * a.my)[0];
+        if (p.win) { p.o.hp = p.left; foeHp = 0; }
+        else { foeHp -= p.tD * p.my; p.o.hp = 0; }
+      }
+      beaten++;
+    }
+    const maxTotal = ours.reduce((n, o) => n + (o.m.maxHp || o.m.stats.maxHp), 0) || 1;
+    return { wins: true, beaten, total, hpLeft: ours.reduce((n, o) => n + Math.max(0, o.hp), 0) / maxTotal, stuckOn: null };
+  }
+  /**
+   * Meilleure équipe pour la série : les 10 meilleurs candidats (duel moyen contre le palier) sont combinés par 3
+   * (120 équipes) et chaque équipe joue la série simulée. On garde celle qui bat le plus d'adversaires, puis celle
+   * qui finit avec le plus de PV.
+   */
+  function bestGauntletTeam(cands, threats, size = Rt.D.config.maxTeamSize ?? 3) {
+    const mons = cands.filter((m) => m.stats);
+    if (!mons.length || !threats.length) return null;
+    const foes = threats.map((th) => ({ st: Rt.E.speciesAt(th.dex, th.level), levels: th.levels })).filter((f) => f.st);
+    const mean = (m) => foes.reduce((n, f) => n + Math.min(4, Rt.E.duelScore({ stats: m.stats, hp: m.maxHp, levels: m.levels }, { stats: f.st, hp: f.st.maxHp, levels: f.levels }).score), 0) / (foes.length || 1);
+    const ranked = mons.map((m) => ({ m, s: mean(m) })).sort((a, b) => b.s - a.s).slice(0, 10);
+    const k = Math.min(size, ranked.length);
+    let best = null;
+    const pick = (start, chosen) => {
+      if (chosen.length === k) {
+        const team = chosen.map((i) => ranked[i].m);
+        const sim = simulateGauntlet(team, threats);
+        const key = sim.beaten * 10 + sim.hpLeft;
+        if (!best || key > best.key) best = { key, team, sim };
+        return;
+      }
+      for (let i = start; i < ranked.length; i++) { chosen.push(i); pick(i + 1, chosen); chosen.pop(); }
+    };
+    pick(0, []);
+    return best && { team: best.team, ...best.sim };
   }
   /**
    * Meilleure équipe de `size` Pokémon contre une liste de menaces : pour chaque menace, le meilleur duel de l'équipe
@@ -3740,13 +3835,15 @@
     if ((!CONFIG.rebattle && !dedicated) || !eventOpen('rebattle', save)) return null;
     const rb = rebattleState(save);
     if (!rb) return null;
-    const sig = `${rb.region}|${rb.tier.id}|${rb.step}|${save?.box?.length}|${(save?.box ?? []).reduce((n, m) => n + m.level, 0)}`;
-    if (mem.rbPlan?.sig !== sig) mem.rbPlan = { sig, plan: bestTeamVs(centerCandidates(save), rebattleThreats(rb)) };
+    const sig = `${rb.region}|${rb.tier.id}|${rb.step}|${save?.box?.length}|${(save?.box ?? []).reduce((n, m) => n + m.level, 0)}|${JSON.stringify([save?.comboLevels, save?.dieLevels])}`;
+    if (mem.rbPlan?.sig !== sig) mem.rbPlan = { sig, plan: bestGauntletTeam(centerCandidates(save), rebattleThreats(rb)) };
     const plan = mem.rbPlan.plan;
     if (!plan) return null;
-    // Mode dédié : on joue avec la meilleure équipe possible ; sinon seulement si elle atteint le seuil
-    if (!dedicated && (plan.avg < CONFIG.rebattleReadyScore || plan.worst < CONFIG.bossWorstScore)) return null;
-    return { rb, ...plan, ready: plan.avg >= CONFIG.rebattleReadyScore && plan.worst >= CONFIG.bossWorstScore };
+    // Prête = la série simulée est gagnée avec une marge de PV (les soins et la chance des dés ne sont pas comptés)
+    const ready = plan.wins && plan.hpLeft >= CONFIG.rebattleHpMargin;
+    // Mode dédié : l'équipe se compose même avant d'être prête (elle s'entraîne ensemble) ; sinon seulement prête
+    if (!dedicated && !ready) return null;
+    return { rb, ...plan, avg: plan.hpLeft, worst: plan.beaten / (plan.total || 1), ready };
   }
 
   /* Régions */
@@ -4167,7 +4264,7 @@
         { p: 'dayCare', t: 'bool', l: 'Pension : faire éclore les Œufs et déposer un couple' },
         { p: 'dayCareCheckMin', t: 'num', l: '↳ y passer au plus toutes les N min', min: 5, max: 600, step: 5 },
         { p: 'rebattle', t: 'bool', l: 'Revanche du Conseil 4 quand l’équipe est prête' },
-        { p: 'rebattleReadyScore', t: 'num', l: '↳ duel moyen exigé', min: 0.5, max: 4, step: 0.05 },
+        { p: 'rebattleHpMargin', t: 'pct', l: '↳ lancée si la série simulée est gagnée avec au moins (% des PV)', h: 'Le bot simule les 5 combats d’affilée (PV qui ne remontent pas, meilleur Pokémon envoyé contre chaque adversaire). Soins et chance des dés non comptés.' },
         { p: 'rebattleMaxTries', t: 'num', l: '↳ défaites max par jour', min: 1, max: 20 },
       ] },
     ], special: 'activity' },
@@ -4493,7 +4590,7 @@
   }
 
   const api = { itemEvolutions, evolutionTargets, healTierFor, shopTiers, bot, CONFIG, MODES, DEFAULTS, setMode, setOption, resetOptions, setTeamLock, bossMatchup, bossTeam, journal, Rt, mem, readBattle, teamMons, boxMons,
-    upgradeCandidates, rebattleThreats, bestTeamVs, rebattlePlan, starterFor, newRegionOpen, regionSwitchDue, regionTick, playPartner, stoneNeeds, stoneGoldShortfall, consumablesReserve, centerCandidates, comboGains, catchScreenDex, captureParam, ballItemOf, upgradePick, xpShare, usefulXp, pickTrainees, catchOnlyDex, wildShare, dexWorthEvolving, dexUsefulEvolutions, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, rebattleActivity, battleItems, ensureRaidTeam, openRaids, nextRaid, playRaidPage, playCatch, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
+    upgradeCandidates, rebattleThreats, bestTeamVs, rebattlePlan, starterFor, newRegionOpen, regionSwitchDue, regionTick, playPartner, stoneNeeds, stoneGoldShortfall, consumablesReserve, centerCandidates, comboGains, catchScreenDex, captureParam, ballItemOf, upgradePick, xpShare, usefulXp, pickTrainees, catchOnlyDex, wildShare, dexWorthEvolving, dexUsefulEvolutions, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, rebattleActivity, simulateGauntlet, bestGauntletTeam, rebattleUpgrade, battleItems, ensureRaidTeam, openRaids, nextRaid, playRaidPage, playCatch, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
     areaThreats, missingSpecies, desiredArea, buildData, Engine,
     obtainedDex, fossilTargets, catchTargetDex, targetArea, wantLuck, canBreed, dayCarePick, dayCareDue, eventOpen, rebattleState, rebattleMatchup, rebattleDue,
     raidBossHp, raidOdds, raidTrainee, parseSchedule, scheduledMode, Stats, noteCatchResult, notify, WakeLock };
