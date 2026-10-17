@@ -26,7 +26,7 @@ Le menu de l'extension Tampermonkey donne accès aux mêmes actions (démarrer, 
 ### Modes
 
 - **Progression** : enchaîne les zones et les arènes.
-- **Pokédex : captures** : reste dans les zones où il manque des espèces sauvages et capture chaque nouvelle espèce avec la meilleure chance disponible (Ball, appât, amélioration « Chance de capture »), même si c'est une Hyper Ball. Le Pokédex se remplit uniquement par capture : aucune évolution n'est provoquée. Les fossiles en cours de réveil comptent comme obtenus ; les fossiles d'espèces manquantes sont achetés ou cherchés dans leur zone.
+- **Pokédex : captures** : reste dans les zones où il manque des espèces sauvages et capture chaque nouvelle espèce avec la meilleure chance disponible (Ball, appât, amélioration « Chance de capture »), même si c'est une Hyper Ball. Il ne fait évoluer un Pokémon que si son évolution directe manque au Pokédex et ne se capture pas facilement en sauvage. Les fossiles en cours de réveil comptent comme obtenus ; les fossiles d'espèces manquantes sont achetés ou cherchés dans leur zone.
 - **Pokédex : évolutions** : recapture les espèces qui débloquent une évolution par niveau manquante, entraîne le Pokémon le plus proche du palier, utilise les pierres possédées.
 - **Farm** : reste dans une zone choisie (XP, ₽, chromatiques), avec l'équipe verrouillée. Objectifs automatiques : « XP » (zone qui rapporte le plus d'XP sans risque) ou « ₽ » (zone la plus rentable).
 - **Versus** : compose une équipe taillée contre chaque adversaire (3 Pokémon au N.50, compte connecté requis), sinon joue dans le mode de repli.

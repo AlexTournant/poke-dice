@@ -792,13 +792,26 @@ test('Raid : l’équipe est refaite dans le bon ordre, même quand « Enregistr
   } finally { document.querySelectorAll = before; P.Rt.i18n.clear(); P.Rt.frNameToDex.clear(); delete P.Rt.D.config.events; }
 });
 
-test('Pokédex : captures — aucun élève pour une évolution, le Pokédex se remplit par capture', () => {
-  const save = setup({ box: [['c', 999, 100], ['cat', 10, 5], ['pid', 16, 45]], team: ['c'], pokedex: [999, 10, 16] });
+test('Pokédex : captures — on ne fait évoluer que vers une espèce absente du Pokédex et introuvable en sauvage', () => {
+  // Chenipan → Chrysacier → Papilusion ; Roucool → Roucoups ; Osselait → Ossatueur
+  const save = setup({ box: [['c', 999, 100], ['cat', 10, 5], ['pid', 16, 15], ['cub', 104, 20]], team: ['c'], pokedex: [999, 10, 11, 16, 104] });
   multiExp();
   P.setMode('pokedex', { persist: false });
-  assert.ok(P.catchOnlyDex());
-  assert.ok(!P.pickTrainees(save, 3, new Set(['c'])).some((t) => /évolution/.test(t.why)), 'pas d’entraînement pour Chrysacier en mode captures');
-  P.setMode('pokedexEvo', { persist: false });
-  assert.match(P.pickTrainees(save, 3, new Set(['c']))[0].why, /évolution/, 'le mode évolutions, lui, entraîne Chenipan');
-  P.setMode('progression', { persist: false });
+  save.areaProgress.forest = {};
+  // Chrysacier déjà recensé : faire monter Chenipan ne sert à rien (même si Papilusion manque)
+  assert.ok(!P.dexUsefulEvolutions(save).some((t) => t.mon.id === 'cat'), 'évolution directe déjà au Pokédex');
+  // Roucoups manque et n'apparaît nulle part en sauvage : on fait évoluer Roucool
+  assert.ok(P.dexUsefulEvolutions(save).some((t) => t.mon.id === 'pid' && t.toDex === 17));
+  // Ossatueur manque mais apparaît souvent en sauvage dans une zone ouverte : on le capture plutôt
+  const cave = P.Rt.D.areas.cave; const pool = cave.wildPool;
+  cave.wildPool = [...pool, { dex: 105, weight: 50, minLevel: 6, maxLevel: 10 }];
+  save.areaProgress.cave = {};
+  try {
+    assert.ok(P.wildShare(105, save) >= 0.4);
+    assert.ok(!P.dexWorthEvolving(105, save), 'Ossatueur se capture');
+    const picks = P.pickTrainees(save, 2, new Set(['c']));
+    assert.deepEqual(picks.map((t) => t.m.id), ['pid'], 'seul Roucool est un élève utile au Pokédex');
+    const plan = P.xpTeamPlan(save, [...P.teamMons(save), ...P.boxMons(save)], [], P.Rt.D.areas.route1, 3);
+    assert.equal(plan.carriers.length + plan.trainees.length, 3, 'les places restantes vont aux meilleurs Pokémon');
+  } finally { cave.wildPool = pool; P.setMode('progression', { persist: false }); }
 });

@@ -149,6 +149,7 @@
     xpTrainees: true,             // au Centre : le plus fort porte l'équipe, les autres places vont à des élèves de la Boîte
     carrierSafeScore: 1.6,        // ↳ duel moyen du porteur contre la zone sous lequel on garde 2 porteurs (1 seul élève)
     xpLead: true,                 // meneur choisi pour l'XP utile (pas d'XP perdue au niveau max), parmi les duels sans risque
+    dexCatchInsteadPct: 5,        // Pokédex : captures — une évolution manquante qui apparaît en sauvage à ≥ N % d'une zone ouverte se capture plutôt que s'entraîner
     dexFocus: 'catch',            // mode Pokédex : 'catch' (espèces sauvages jamais capturées) ou 'evo' (évolutions manquantes)
     // Activités (modes Versus / Raids) : le bot y va quand c'est ouvert, sinon il joue dans le mode de repli
     activity: null,
@@ -1531,11 +1532,42 @@
     return best?.a ?? null;
   }
 
-  /**
-   * Mode « Pokédex : captures » : le Pokédex se remplit uniquement en capturant. Aucune évolution n'est provoquée
-   * (ni entraînement d'élève pour un palier, ni objet d'évolution) : c'est le rôle du mode « Pokédex : évolutions ».
-   */
   const catchOnlyDex = () => CONFIG.mode === 'pokedex' && CONFIG.dexFocus === 'catch';
+  /** Plus grande part des rencontres sauvages d'une zone ouverte (région courante) où apparaît cette espèce (0 à 1). */
+  function wildShare(dex, save = readSave()) {
+    const region = regionId(save);
+    let best = 0;
+    for (const a of Rt.D.areaList) {
+      if (a.regionId !== region || !isUnlocked(a, save)) continue;
+      const pool = (a.wildPool ?? []).filter((w) => (w.weight ?? 1) > 0);
+      const total = pool.reduce((n, w) => n + (w.weight ?? 1), 0);
+      if (total) best = Math.max(best, pool.filter((w) => w.dex === dex).reduce((n, w) => n + (w.weight ?? 1), 0) / total);
+    }
+    return best;
+  }
+  /**
+   * Mode « Pokédex : captures » : faire évoluer un Pokémon ne sert que si son évolution DIRECTE manque au Pokédex
+   * (Minidraco → Draco déjà recensé : inutile, même si Dracolosse manque) et qu'on ne peut pas simplement la capturer :
+   * une espèce qui apparaît en sauvage à ≥ dexCatchInsteadPct % d'une zone ouverte se capture.
+   */
+  function dexWorthEvolving(toDex, save = readSave()) {
+    return !obtainedDex(save).has(toDex) && wildShare(toDex, save) * 100 < CONFIG.dexCatchInsteadPct;
+  }
+  /** Évolutions directes par niveau qui apportent une espèce au Pokédex (mode captures). */
+  function dexUsefulEvolutions(save = readSave()) {
+    const region = regionId(save);
+    const out = [];
+    for (const m of [...teamMons(save), ...boxMons(save)]) {
+      if (!m.stats || m.fossil) continue;
+      for (const e of evosOf(m.dex, region)) {
+        if (e.level == null || !inRegionDex(e.toDex, region) || !dexWorthEvolving(e.toDex, save)) continue;
+        out.push({ mon: m, toDex: e.toDex, level: e.level, toGo: Math.max(0, e.level - m.level) });
+      }
+    }
+    const best = new Map();
+    for (const t of out) if (!best.has(t.toDex) || t.toGo < best.get(t.toDex).toGo) best.set(t.toDex, t);
+    return [...best.values()].sort((a, b) => a.toGo - b.toGo);
+  }
 
   /* ── XP : Multi Exp, porteur et élèves ── */
   const maxLevel = () => Rt.D.config.maxLevel ?? 100;
@@ -1581,8 +1613,13 @@
     const pool = [...teamMons(save), ...boxMons(save)].filter((m) => m.stats && !m.fossil && m.level < max && !exclude.has(m.id));
     const out = [], taken = new Set();
     const take = (m, why) => { if (m && !taken.has(m.id) && out.length < n && pool.some((x) => x.id === m.id)) { taken.add(m.id); out.push({ m, why }); } };
-    // Mode Pokédex : captures → le Pokédex se remplit par capture seulement, pas d'entraînement pour une évolution
-    if (!catchOnlyDex()) for (const t of evolutionTargets(save)) if (t.level != null && t.toGo > 0) take(pool.find((x) => x.id === t.mon.id), `évolution ${Rt.nameOf(t.toDex)} au N.${t.level}`);
+    // Mode Pokédex : captures → seuls les élèves dont l'évolution directe manque au Pokédex (et ne se capture pas) ;
+    // le reste de l'équipe reste fort : faire monter un Pokémon déjà recensé ne remplit pas le Pokédex
+    if (catchOnlyDex()) {
+      for (const t of dexUsefulEvolutions(save)) if (t.toGo > 0) take(pool.find((x) => x.id === t.mon.id), `évolution ${Rt.nameOf(t.toDex)} au N.${t.level} (absente du Pokédex)`);
+      return out;
+    }
+    for (const t of evolutionTargets(save)) if (t.level != null && t.toGo > 0) take(pool.find((x) => x.id === t.mon.id), `évolution ${Rt.nameOf(t.toDex)} au N.${t.level}`);
     const vsLevel = 50;
     const n50 = (save?.box ?? []).filter((m) => m.level >= vsLevel).length;
     if (n50 < 3) for (const m of [...pool].filter((x) => x.level < vsLevel).sort((a, b) => b.level - a.level).slice(0, 3 - n50)) take(m, 'Versus (N.50)');
@@ -1603,6 +1640,9 @@
     const carriers = raw.slice(0, nCarriers).map((x) => x.m);
     const kept = keep && !carriers.some((c) => c.id === keep.id) && carriers.length < size ? [keep] : [];
     const trainees = pickTrainees(save, size - carriers.length - kept.length, new Set([...carriers, ...kept].map((m) => m.id)));
+    // Pas assez d'élèves utiles (mode captures) : les places restantes vont aux meilleurs duels suivants
+    const used = new Set([...carriers, ...kept, ...trainees.map((t) => t.m)].map((m) => m.id));
+    for (const x of raw) { if (carriers.length + kept.length + trainees.length >= size) break; if (!used.has(x.m.id)) { carriers.push(x.m); used.add(x.m.id); } }
     return { carriers, kept, trainees };
   }
 
@@ -1876,7 +1916,7 @@
     const challenge = btn(['ui.area.challenge', 'ui.area.faceIt']);
     // Pas prêt → on continue d'explorer : XP pour l'équipe (rebâtie contre le boss au prochain Centre)
     if (challenge && teamReadyForBoss(area, save)) { log(`🏆 défi : ${norm(challenge.innerText)}`); mem.megaUsed = false; mem.fightKind = 'gym'; noteBossFight(area); challenge.click(); return true; }
-    if (CONFIG.useEvolutionItems && !catchOnlyDex() && startItemEvolution(save)) return true;
+    if (CONFIG.useEvolutionItems && startItemEvolution(save)) return true;
     if (CONFIG.schedule && applySchedule()) return true;
     if (await errandTick(save)) return true;
     if (CONFIG.activity && (await activityTick())) return true;
@@ -2733,7 +2773,7 @@
   /* ── 6.10 Évolutions par objet : Équipe → fiche du Pokémon → UTILISER UN OBJET → la Pierre ── */
   function startItemEvolution(save) {
     mem.evolveTried ??= new Set();
-    const t = itemEvolutions(save).find((x) => x.owned > 0 && !mem.evolveTried.has(`${x.mon.id}>${x.toDex}`));
+    const t = itemEvolutions(save).find((x) => x.owned > 0 && !mem.evolveTried.has(`${x.mon.id}>${x.toDex}`) && (!catchOnlyDex() || dexWorthEvolving(x.toDex, save)));
     if (!t) return false;
     mem.evolve = { ...t, steps: 0 };
     log(`💎 évolution par objet : ${t.mon.name} N.${t.mon.level} + ${Rt.t('item.' + t.item, t.item)} → ${Rt.nameOf(t.toDex)}`);
@@ -3720,6 +3760,7 @@
         { p: 'catchKnown', t: 'sel', l: 'Espèce déjà capturée', o: [['cheap', 'Ball la moins chère'], ['normal', 'règle du seuil ci-dessous'], ['free', 'Sans Ball (gratuit)']] },
         { p: 'catchMinPct', t: 'num', l: '↳ seuil (%)', min: 0, max: 100, step: 5 },
         { p: 'pokedexFleeKnownMargin', t: 'num', l: 'Pokédex : fuit les espèces connues si l’équipe dépasse la zone de +N niv.', min: 0, max: 30 },
+        { p: 'dexCatchInsteadPct', t: 'num', l: 'Pokédex : captures — évolution manquante à capturer plutôt qu’entraîner si elle apparaît à ≥ N %', min: 0, max: 100, step: 1, h: 'Une espèce absente qu’on peut rencontrer en sauvage à au moins N % d’une zone ouverte se capture ; en dessous (rare ou introuvable), le bot fait évoluer le Pokémon qui la donne.' },
         { p: 'pokedexStallEncounters', t: 'num', l: 'Pokédex : quitte une zone après N rencontres sans nouvelle espèce', min: 10, max: 500, step: 10 },
         { p: 'pokedexStallMinutes', t: 'num', l: '↳ et n’y revient pas avant N minutes', min: 0, max: 600, step: 5 },
       ] },
@@ -4068,7 +4109,7 @@
   }
 
   const api = { itemEvolutions, evolutionTargets, healTierFor, shopTiers, bot, CONFIG, MODES, DEFAULTS, setMode, setOption, resetOptions, setTeamLock, bossMatchup, bossTeam, journal, Rt, mem, readBattle, teamMons, boxMons,
-    upgradeCandidates, comboGains, catchScreenDex, captureParam, ballItemOf, upgradePick, xpShare, usefulXp, pickTrainees, catchOnlyDex, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, ensureRaidTeam, nextRaid, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
+    upgradeCandidates, comboGains, catchScreenDex, captureParam, ballItemOf, upgradePick, xpShare, usefulXp, pickTrainees, catchOnlyDex, wildShare, dexWorthEvolving, dexUsefulEvolutions, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, ensureRaidTeam, nextRaid, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
     areaThreats, missingSpecies, desiredArea, buildData, Engine,
     obtainedDex, fossilTargets, catchTargetDex, targetArea, wantLuck, canBreed, dayCarePick, dayCareDue, eventOpen, rebattleState, rebattleMatchup, rebattleDue,
     raidBossHp, raidOdds, raidTrainee, parseSchedule, scheduledMode, Stats, noteCatchResult, notify, WakeLock };

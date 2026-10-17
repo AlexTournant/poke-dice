@@ -19,7 +19,7 @@ Chaque section `## [X.Y.Z]` correspond à un tag `vX.Y.Z`. Les notes de la relea
 ### Modifié
 
 - Capture : une nouvelle espèce reçoit toujours la Ball qui donne la meilleure chance, même si c'est une Hyper Ball (`catchNewPct` passe de 80 à 100). La Master Ball reste réservée aux légendaires. Le journal liste toutes les options et leur chance.
-- Mode « Pokédex : captures » : le Pokédex se remplit uniquement en capturant. Aucune évolution n'est provoquée, ni par entraînement ni par objet. C'est le rôle du mode « Pokédex : évolutions ».
+- Mode « Pokédex : captures » : le bot ne fait évoluer un Pokémon (élève au Centre ou objet d'évolution) que si son **évolution directe** manque au Pokédex et n'apparaît pas en sauvage à au moins `dexCatchInsteadPct` % (5 %) d'une zone ouverte. Sinon, elle se capture. Faire monter un Pokémon dont l'évolution est déjà recensée ne sert à rien : Minidraco → Draco (déjà vu) n'est plus entraîné, même si Dracolosse manque. Les places sans élève utile vont aux Pokémon les plus forts.
 
 ## [1.7.1]
 
