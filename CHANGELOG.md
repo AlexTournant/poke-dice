@@ -6,6 +6,13 @@ Chaque section `## [X.Y.Z]` correspond à un tag `vX.Y.Z`. Les notes de la relea
 
 ## [Non publié]
 
+## [1.6.1]
+
+### Corrigé
+
+- Capture : une espèce déjà au Pokédex recevait toujours la Ball la moins chère, même à 33 % de chance. Nouvelle règle du seuil (80 % par défaut, `catchKnown: 'normal'`) : si même la meilleure Ball reste sous le seuil, on lance la meilleure ; sinon la moins chère qui le dépasse. Même règle pour une nouvelle espèce (`catchNewPct` passe de 100 à 80 %). Chromatiques, légendaires et raids gardent la meilleure chance.
+- Améliorations de combos : le bot ne comptait que les lancers où un combo était déjà le mieux payé. Les combos faciles mais souvent dépassés (la Paire derrière une Double paire, par exemple) semblaient inutiles et n'étaient presque jamais achetés. Il mesure maintenant le gain réel du combo payé après amélioration, avec les relances jouées pour former un combo et les Pokémon de la Boîte (poids `upgradeBoxWeight`, comme pour les dés).
+
 ## [1.6.0]
 
 ### Ajouté
