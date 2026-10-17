@@ -30,6 +30,7 @@ Le menu de l'extension Tampermonkey donne accès aux mêmes actions (démarrer, 
 - **Pokédex : évolutions** : recapture les espèces qui débloquent une évolution manquante (par niveau ou par pierre), entraîne le Pokémon le plus proche du palier, utilise les pierres possédées et achète les autres. S'il manque de l'or pour une pierre, il va farmer les ₽ dans la zone la plus rentable.
 - **Farm** : reste dans une zone choisie (XP, ₽, chromatiques), avec l'équipe verrouillée. Objectifs automatiques : « XP » (zone qui rapporte le plus d'XP sans risque) ou « ₽ » (zone la plus rentable).
 - **Versus** : compose une équipe taillée contre chaque adversaire (3 Pokémon au N.50, compte connecté requis), sinon joue dans le mode de repli.
+- **Revanche du Conseil 4** : le Centre compose la meilleure équipe contre tout le palier, puis le bot ouvre la revanche depuis l'accueil et enchaîne les combats (mode de repli en attendant).
 - **Raids** : raid du jour et raids légendaires des zones terminées. L'équipe, les alliés PNJ et les amis sont choisis sur les dégâts infligés au boss (règles de type du raid). Si l'estimation prévoit une défaite nette, le bot arrête pour la journée et entraîne un « contre » au Centre.
 
 Dans tous les modes, une **espèce visée** (onglet Captures) emmène le bot dans la zone où elle apparaît le plus, jusqu'à sa capture.

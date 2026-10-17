@@ -1104,3 +1104,29 @@ test('Régions : écran du partenaire — la bonne Poké Ball, Choisir, puis C�
     assert.equal(P.mem.regionGo, null, 'changement de région terminé');
   } finally { document.querySelectorAll = before; document.body.innerText = ''; P.Rt.i18n.clear(); P.Rt.frNameToDex.clear(); P.setOption('starterPick.johto', '', { persist: false }); P.mem.regionGo = null; }
 });
+
+test('Mode Revanche du Conseil 4 : équipe préparée au Centre, puis la carte de l’accueil', () => {
+  const save = setup({ box: [['a', 999, 60], ['b', 16, 30]], team: ['b'], pokedex: [999, 16] });
+  P.Rt.D.regions.kanto.leagueAreaId = 'route1';
+  P.Rt.D.trainers.e1 = { id: 'e1', name: 'Olga', team: [{ dex: 16, level: 20 }] };
+  P.Rt.D.config.rebattleLineups = { kanto: { bronze: ['e1'] } };
+  P.Rt.D.config.events = { rebattle: { access: 'all', tiers: [{ id: 'bronze', gold: 1, upgradeDelta: 1 }] } };
+  P.setMode('rebattle', { persist: false });
+  P.mem.rbPlan = null; P.mem.errand = null; P.mem.actLog = null;
+  localStorage.removeItem('pokebot.activity');
+  try {
+    assert.equal(P.CONFIG.activity, 'rebattle', 'mode activité, comme Versus et Raids');
+    const plan = P.rebattlePlan(save);
+    assert.ok(plan?.team.some((m) => m.id === 'a'), 'le Gros N.60 est dans l’équipe de revanche');
+    assert.equal(P.rebattleActivity(save), false, 'équipe pas encore composée : on attend le Centre');
+    save.team = plan.team.map((m) => m.id);
+    P.mem.rbPlan = null;
+    const card = fakeEl({ attrs: { 'aria-label': 'Revanche du Conseil 4, palier Bronze : ensuite, Olga. Combat 1 sur 5. Ouvrir' } });
+    P.Rt.i18n.set('ui.events.rebattle.label', '{name}, palier {tier} : ensuite, {foe}. {sub}. Ouvrir');
+    const before = document.querySelectorAll;
+    document.querySelectorAll = (sel) => (sel === 'button[aria-label]' ? [card] : []);
+    try { assert.ok(P.rebattleActivity(save)); } finally { document.querySelectorAll = before; }
+    assert.equal(card.clicks, 1, 'ouverte depuis la carte de l’accueil');
+    assert.equal(P.mem.errand, 'rebattle');
+  } finally { P.mem.errand = null; P.Rt.i18n.clear(); delete P.Rt.D.config.events; delete P.Rt.D.config.rebattleLineups; delete P.Rt.D.regions.kanto.leagueAreaId; P.setMode('progression', { persist: false }); }
+});
