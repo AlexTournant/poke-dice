@@ -1,11 +1,15 @@
 // ==UserScript==
 // @name         Pokédice Autopilot
 // @namespace    pokedice-bot
-// @version      1.5.0
+// @version      1.5.1
 // @description  Joue à Pokédice — modes Progression / Pokédex / Farm / Versus / Raids : combats optimisés, soins, captures, boutique, améliorations, Centre, zones.
 // @match        https://poke-dice.netlify.app/*
 // @grant        none
 // @run-at       document-idle
+// @homepageURL  https://github.com/AlexTournant/poke-dice
+// @supportURL   https://github.com/AlexTournant/poke-dice/issues
+// @updateURL    https://raw.githubusercontent.com/AlexTournant/poke-dice/main/pokedice-bot.user.js
+// @downloadURL  https://raw.githubusercontent.com/AlexTournant/poke-dice/main/pokedice-bot.user.js
 // ==/UserScript==
 
 /*
@@ -86,9 +90,10 @@
     economy: true,
     goldReserve: 20,
     // Ce que le bot a le droit d'acheter (panneau ⚙️ → Dépenses)
-    buy: { heal: true, ball: true, rareBall: true, cure: true, ether: true, dieUpgrades: true, comboUpgrades: true, offline: true, luck: false, sell: true },
+    buy: { heal: true, ball: true, rareBall: true, cure: true, ether: true, dieUpgrades: true, comboUpgrades: true, offline: true, luck: false, sell: true, bait: true, fossil: true },
+    pokedexLuck: true,            // mode Pokédex (captures) : achète "Chance de capture" même si buy.luck est coupé
     // Stocks de REPLI (avant d'avoir mesuré la consommation réelle). Un objet plus fort compte pour un plus faible.
-    stock: { heal: 4, ball: 8, rareBall: 2, cure: 1, ether: 1 },
+    stock: { heal: 4, ball: 8, rareBall: 2, cure: 1, ether: 1, bait: 3 },
     stockHorizon: 25,             // stocks dimensionnés pour ~25 rencontres de consommation mesurée
     rateWindow: 60,               // consommation mesurée sur les 60 dernières rencontres
     healMaxStock: 10,
@@ -97,7 +102,7 @@
     healMinStock: 2,              // sous ce seuil de soins (du bon palier), achat prioritaire
     bossHealStock: 4,             // boss en attente : au moins N soins du bon palier (réserve avant le combat qui compte)
     healTargetRatio: 0.5,         // palier de soin acheté : il doit rendre ≥ 50 % des PV max du plus gros Pokémon de l'équipe
-    shopShares: { heal: 0.35, ball: 0.3, rareBall: 0.25, stone: 0.4, cure: 0.1, ether: 0.1, urgent: 0.6 }, // part max de l'or par famille
+    shopShares: { heal: 0.35, ball: 0.3, rareBall: 0.25, stone: 0.4, cure: 0.1, ether: 0.1, bait: 0.15, fossil: 0.5, urgent: 0.6 }, // part max de l'or par famille
     minBasket: 40,                // pas de trajet boutique pour moins de ₽40 d'achats (sauf urgence)
     // Améliorations
     upgradeStrategy: 'save',      // 'save' : épargne pour la plus rentable ; 'greedy' : la meilleure abordable tout de suite
@@ -137,6 +142,7 @@
     catchKnown: 'cheap',          // espèce déjà au Pokédex : 'free' (Sans Ball), 'cheap' (Ball la moins chère), 'normal' (catchMinPct)
     catchMinPct: 80,              // 'normal' : Ball la moins chère qui atteint ce %
     catchRarePct: 95,             // chromatique ou légendaire : la meilleure chance possible
+    catchTarget: '',              // espèce visée (nom affiché par le jeu) : le bot va dans la meilleure zone pour elle et la capture
     farmGoal: 'xp',
     dexFocus: 'catch',            // mode Pokédex : 'catch' (espèces sauvages jamais capturées) ou 'evo' (évolutions manquantes)
     // Activités (modes Versus / Raids) : le bot y va quand c'est ouvert, sinon il joue dans le mode de repli
@@ -149,7 +155,21 @@
     raidDaily: true,              // raid du jour
     raidLegendary: true,          // raids légendaires des zones terminées
     raidMaxTries: 8,              // essais par raid et par jour avant d'aller s'entraîner
-    raidAutoTeam: true,           // compose l'équipe de raid contre le boss à chaque raid               // mode Farm : 'xp' (zone choisie) ou 'gold' (zone qui rapporte le plus de ₽ par rencontre)
+    raidAutoTeam: true,           // compose l'équipe de raid contre le boss à chaque raid
+    raidFriends: true,            // ajoute au groupe les amis dont l'équipe de raid est la plus recommandée contre le boss
+    raidMinOdds: 0.6,             // dégâts estimés (toi + alliés) / PV totaux du boss : en dessous, on arrête après 2 essais…
+    raidTrain: true,              // …et on entraîne au Centre le meilleur « contre » du boss qui n'a pas le niveau plafond
+    // Événements et routines (tous modes)
+    eventWheel: true,             // Roue de la fortune : un tour gratuit par jour
+    rebattle: false,              // Revanche du Conseil 4 : enchaîne les paliers quand l'équipe est prête (5 combats sans Centre)
+    rebattleReadyScore: 1.4,      // ↳ duel moyen exigé contre les équipes du palier
+    rebattleMaxTries: 3,          // ↳ défaites par jour avant d'attendre le lendemain
+    dayCare: true,                // Pension : fait éclore les Œufs et y laisse un couple de la Boîte (Œufs : espèces absentes ×4)
+    dayCareCheckMin: 20,          // ↳ passe à la Pension au plus toutes les N minutes (sauf Œuf qui attend)
+    // Confort
+    notify: true,                 // notification du navigateur : chromatique, légendaire, boss, Œuf chromatique, bot arrêté
+    notifySound: true,            // ↳ petit son en plus
+    schedule: '',                 // planning : "08:00-23:00=pokedex; 23:00-08:00=farm" (vide = désactivé)               // mode Farm : 'xp' (zone choisie) ou 'gold' (zone qui rapporte le plus de ₽ par rencontre)
 
     // Performance (fin de jeu : Pokémon à 5-6 dés, grosse Boîte)
     exactEnumLimit: 1296,         // ≤ 6^4 issues → calcul exact ; au-delà, échantillonnage déterministe
