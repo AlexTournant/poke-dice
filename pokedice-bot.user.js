@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pokédice Autopilot
 // @namespace    pokedice-bot
-// @version      1.11.2
+// @version      1.11.3
 // @description  Joue à Pokédice — modes Progression / Pokédex / Farm / Versus / Raids : combats optimisés, soins, captures, boutique, améliorations, Centre, zones.
 // @match        https://poke-dice.netlify.app/*
 // @grant        none
@@ -690,14 +690,16 @@
   /** Espèces qu'on peut rencontrer dans une zone (comme le jeu : poids > 0 — les fossiles de la zone ont un poids nul). */
   const wildDexes = (area) => [...new Set((area?.wildPool ?? []).filter((w) => (w.weight ?? 1) > 0).map((w) => w.dex))].filter((d) => Rt.D.species[d]);
   const currentArea = (save = readSave()) => Rt.D.areas[save?.currentAreaId] ?? null;
+  /** Région d'une zone, comme le jeu (tt) : area.regionId, Kanto par défaut. */
+  const areaRegion = (a) => a?.regionId ?? 'kanto';
   /**
    * Chaque région a sa propre sauvegarde : la région où l'on joue est à la racine (areaProgress, pokedex, box…),
    * les autres sont rangées dans save.parked[région] (port de X1 / mte). Avant la v1.11.2, le bot ne lisait que la
    * région courante : depuis Johto, les raids et événements débloqués à Kanto semblaient fermés.
    */
-  const isHereRegion = (save, region) => !region || region === (save?.region ?? currentArea(save)?.regionId);
+  const isHereRegion = (save, region) => (region ?? 'kanto') === regionId(save);
   const progressOf = (save, areaId) => {
-    const region = Rt.D.areas[areaId]?.regionId;
+    const region = areaRegion(Rt.D.areas[areaId]);
     return isHereRegion(save, region) ? save?.areaProgress?.[areaId] : save?.parked?.[region]?.areaProgress?.[areaId] ?? save?.areaProgress?.[areaId];
   };
   const pokedexOf = (save, region) => (isHereRegion(save, region) ? save?.pokedex ?? [] : save?.parked?.[region]?.pokedex ?? []);
@@ -1338,13 +1340,18 @@
   }
   function nextAreaFor(save = readSave()) {
     const prog = save?.areaProgress ?? {};
-    const region = currentArea(save)?.regionId ?? save?.region;
-    return Rt.D.areaList.find((a) => a.regionId === region && !a.hidden && !prog[a.id]?.cleared && !prog[a.id]?.bossDefeated && a.id !== save.currentAreaId) ?? null;
+    const region = regionId(save);
+    return Rt.D.areaList.find((a) => areaRegion(a) === region && !a.hidden && !prog[a.id]?.cleared && !prog[a.id]?.bossDefeated && a.id !== save.currentAreaId) ?? null;
   }
   const readyForArea = (area, save = readSave()) => !area || avg(topLevels([...teamMons(save), ...boxMons(save)])) >= (area.minLevel ?? 0) - CONFIG.nextAreaLevelSlack;
 
   /* ── Pokédex : captures ET évolutions ── */
-  const regionId = (save = readSave()) => currentArea(save)?.regionId ?? save?.region ?? 'kanto';
+  /**
+   * Région où l'on joue : save.region (Kanto par défaut), comme le jeu (ie). Avant la v1.11.3, le bot la déduisait de la
+   * zone courante et comparait area.regionId tel quel (absent = Kanto dans le jeu) : à Johto, il pouvait se croire à
+   * Kanto et repartir sur la Route 1.
+   */
+  const regionId = (save = readSave()) => save?.region ?? areaRegion(currentArea(save));
   const inRegionDex = (dex, region) => { const r = Rt.D.regions[region]?.dexRange; return !r || (dex >= r[0] && dex <= r[1]); };
   /** Évolutions valables dans la région (le jeu filtre `region` / `notInRegion`). */
   const evosOf = (dex, region) => (Rt.D.species[dex]?.evolutions ?? []).filter((e) => Rt.D.species[e.toDex] && (!e.region || e.region === region) && e.notInRegion !== region);
@@ -1424,7 +1431,7 @@
   function missingSpecies(area, save = readSave(), focus = CONFIG.dexFocus) {
     if (!area) return [];
     const caught = obtainedDex(save);
-    const region = area.regionId ?? regionId(save);
+    const region = areaRegion(area);
     const wild = wildDexes(area);
     if (focus !== 'evo') return wild.filter((d) => !caught.has(d));
     const ownedReach = new Set();
@@ -1449,7 +1456,7 @@
     for (const t of itemEvolutions(save)) {
       if (t.owned > 0) continue;
       const it = Rt.D.items[t.item];
-      const cur = by.get(t.item) ?? { item: t.item, price: it?.price ?? Infinity, inShop: !!it?.inShop && (it.shopBadges ?? 0) <= badges && itemOn(t.item), toDex: [], areas: Rt.D.areaList.filter((a) => a.regionId === region && (a.lootPool ?? []).some((l) => l.itemKey === t.item && (l.weight ?? 1) > 0)).map((a) => a.id) };
+      const cur = by.get(t.item) ?? { item: t.item, price: it?.price ?? Infinity, inShop: !!it?.inShop && (it.shopBadges ?? 0) <= badges && itemOn(t.item), toDex: [], areas: Rt.D.areaList.filter((a) => areaRegion(a) === region && (a.lootPool ?? []).some((l) => l.itemKey === t.item && (l.weight ?? 1) > 0)).map((a) => a.id) };
       cur.toDex.push(t.toDex);
       by.set(t.item, cur);
     }
@@ -1491,6 +1498,8 @@
    *  - farm        : la zone de farm choisie
    */
   function desiredArea(save = readSave()) {
+    // Zone courante enregistrée dans une autre région que celle où l'on joue : on repart de la région courante
+    if (currentArea(save) && areaRegion(currentArea(save)) !== regionId(save)) return nextAreaFor(save);
     const cur = currentArea(save);
     const prog = save?.areaProgress?.[save?.currentAreaId];
     const progression = () => {
@@ -1515,8 +1524,8 @@
           return goldArea;
         }
       }
-      const region = cur?.regionId ?? save?.region;
-      const cand = Rt.D.areaList.find((a) => a.regionId === region && a.id !== cur?.id && isUnlocked(a, save) && !mem.travelFail.has(a.id) && !dexStalled(a) && missingSpecies(a, save).length && readyForArea(a, save));
+      const region = regionId(save);
+      const cand = Rt.D.areaList.find((a) => areaRegion(a) === region && a.id !== cur?.id && isUnlocked(a, save) && !mem.travelFail.has(a.id) && !dexStalled(a) && missingSpecies(a, save).length && readyForArea(a, save));
       if (cand) return cand;
       // Pierre introuvable en boutique mais trouvable en explorant une zone ouverte
       if (CONFIG.dexFocus === 'evo') {
@@ -1558,7 +1567,7 @@
     const region = regionId(save);
     let best = null;
     for (const a of Rt.D.areaList) {
-      if (a.regionId !== region || !isUnlocked(a, save) || mem.travelFail.has(a.id) || !readyForArea(a, save)) continue;
+      if (areaRegion(a) !== region || !isUnlocked(a, save) || mem.travelFail.has(a.id) || !readyForArea(a, save)) continue;
       const pool = (a.wildPool ?? []).filter((w) => (w.weight ?? 1) > 0);
       const total = pool.reduce((n, w) => n + (w.weight ?? 1), 0);
       const share = total ? pool.filter((w) => w.dex === dex).reduce((n, w) => n + (w.weight ?? 1), 0) / total : 0;
@@ -1600,8 +1609,8 @@
   function bestXpArea(save = readSave()) {
     if (mem.xpArea && Date.now() - mem.xpArea.at < 60000) return Rt.D.areas[mem.xpArea.id] ?? null;
     const carrier = teamMons(save).filter((m) => m.stats).sort((a, b) => b.level - a.level)[0];
-    const region = currentArea(save)?.regionId ?? save?.region;
-    const cands = carrier ? Rt.D.areaList.filter((a) => a.regionId === region && !a.hidden && save?.areaProgress?.[a.id] && !mem.travelFail.has(a.id)) : [];
+    const region = regionId(save);
+    const cands = carrier ? Rt.D.areaList.filter((a) => areaRegion(a) === region && !a.hidden && save?.areaProgress?.[a.id] && !mem.travelFail.has(a.id)) : [];
     let best = null;
     for (const a of cands) {
       const xp = xpPerEncounter(a, save);
@@ -1617,8 +1626,8 @@
   function bestGoldArea(save = readSave()) {
     if (mem.goldArea && Date.now() - mem.goldArea.at < 60000) return Rt.D.areas[mem.goldArea.id] ?? null;
     const lv = avg(topLevels(teamMons(save)));
-    const region = currentArea(save)?.regionId ?? save?.region;
-    const cands = Rt.D.areaList.filter((a) => a.regionId === region && !a.hidden && save?.areaProgress?.[a.id] && !mem.travelFail.has(a.id) && (a.maxLevel ?? 0) <= lv + 1);
+    const region = regionId(save);
+    const cands = Rt.D.areaList.filter((a) => areaRegion(a) === region && !a.hidden && save?.areaProgress?.[a.id] && !mem.travelFail.has(a.id) && (a.maxLevel ?? 0) <= lv + 1);
     const best = cands.map((a) => ({ a, g: goldPerEncounter(a, save) })).sort((x, y) => y.g - x.g)[0];
     mem.goldArea = { id: best?.a.id ?? null, at: Date.now() };
     if (best && mem.goldAreaLog !== best.a.id) { mem.goldAreaLog = best.a.id; log(`💰 farm à ₽ : ${Rt.areaLabel(best.a)} (≈ ₽${best.g.toFixed(1)} par rencontre)`); }
@@ -1631,7 +1640,7 @@
     const region = regionId(save);
     let best = 0;
     for (const a of Rt.D.areaList) {
-      if (a.regionId !== region || !isUnlocked(a, save)) continue;
+      if (areaRegion(a) !== region || !isUnlocked(a, save)) continue;
       const pool = (a.wildPool ?? []).filter((w) => (w.weight ?? 1) > 0);
       const total = pool.reduce((n, w) => n + (w.weight ?? 1), 0);
       if (total) best = Math.max(best, pool.filter((w) => w.dex === dex).reduce((n, w) => n + (w.weight ?? 1), 0) / total);
@@ -2078,6 +2087,11 @@
     const save = readSave();
     const next = desiredArea(save);
     if (!next || next.id === save?.currentAreaId || mem.travelFail.has(next.id)) return false;
+    // Garde-fou : jamais une zone d'une autre région (elle n'est pas dans la liste des Zones de la région courante)
+    if (areaRegion(next) !== regionId(save)) {
+      if (mem.otherRegionLog !== next.id) { mem.otherRegionLog = next.id; log(`⛔ ${Rt.areaLabel(next)} est à ${Rt.D.regions[areaRegion(next)]?.name ?? areaRegion(next)}, pas à ${Rt.D.regions[regionId(save)]?.name ?? regionId(save)} : zone ignorée`); }
+      return false;
+    }
     // Le jeu refuse de changer de zone tant qu'une rencontre est ouverte : on y retourne d'abord
     if (mem.encounterPending && Date.now() - mem.encounterPending < 120000) return false;
     if (await resumeEncounter()) return true;
@@ -2410,7 +2424,7 @@
     if (save?.events?.raidsDone?.includes(`${area.id}:${boss.dex}`)) return 'done';
     const p = progressOf(save, area.id);
     if (area.mode && (p?.portal || p?.nightmare)) return p.portal?.won || p.nightmare?.won ? 'open' : 'locked';
-    if (p?.bossesDefeated?.includes(boss.dex) && pokedexOf(save, area.regionId).includes(boss.dex)) return 'done';
+    if (p?.bossesDefeated?.includes(boss.dex) && pokedexOf(save, areaRegion(area)).includes(boss.dex)) return 'done';
     return p?.cleared ? 'open' : 'locked';
   }
   /**
@@ -2425,7 +2439,7 @@
     for (const a of Rt.D.areaList) {
       for (const b of a.legendaryBoss ?? []) {
         if (!b.raid || raidStatus(save, a, b) !== 'open') continue;
-        const caught = pokedexOf(save, a.regionId).includes(b.dex);
+        const caught = pokedexOf(save, areaRegion(a)).includes(b.dex);
         if (caught && CONFIG.raidOnlyMissing && !all) continue;
         out.push({ areaId: a.id, dex: b.dex, level: b.level, path: `/raid/${a.id}/${b.dex}`, key: `${a.id}/${b.dex}`, caught });
       }
@@ -2437,7 +2451,7 @@
     const st = actState();
     const out = [];
     if (dailyRaidOpen(save) && st.raidDone !== utcDay()) out.push({ key: 'daily', path: '/events/raid', label: 'Raid du jour' });
-    for (const r of legendaryRaids(save, { all })) out.push({ ...r, label: `${Rt.nameOf(r.dex)} · ${Rt.areaLabel(Rt.D.areas[r.areaId])}${isHereRegion(save, Rt.D.areas[r.areaId]?.regionId) ? '' : ' (' + (Rt.D.regions[Rt.D.areas[r.areaId]?.regionId]?.name ?? '') + ')'}${r.caught ? ' (déjà au Pokédex)' : ''}` });
+    for (const r of legendaryRaids(save, { all })) out.push({ ...r, label: `${Rt.nameOf(r.dex)} · ${Rt.areaLabel(Rt.D.areas[r.areaId])}${isHereRegion(save, areaRegion(Rt.D.areas[r.areaId])) ? '' : ' (' + (Rt.D.regions[areaRegion(Rt.D.areas[r.areaId])]?.name ?? '') + ')'}${r.caught ? ' (déjà au Pokédex)' : ''}` });
     return out;
   }
   /**
@@ -2759,7 +2773,14 @@
     const fb = MODES[CONFIG.mode].label;
     if (!eventOpen('rebattle', save)) { actLog('rb', `🔒 Revanche du Conseil 4 fermée (bats la Ligue de la région) — le bot joue en ${fb} en attendant`); return false; }
     const rb = rebattleState(save);
-    if (!rb) { actLog('rb', `🏅 Revanche du Conseil 4 : tous les paliers de cette région sont terminés — le bot joue en ${fb}`); return false; }
+    if (!rb) {
+      const reg = Rt.D.regions[regionId(save)];
+      const league = reg?.leagueAreaId && save?.areaProgress?.[reg.leagueAreaId];
+      actLog('rb', league?.cleared || league?.bossDefeated
+        ? `🏅 Revanche du Conseil 4 : tous les paliers de ${reg?.name ?? 'cette région'} sont terminés — le bot joue en ${fb}`
+        : `🏅 Revanche du Conseil 4 : celle de ${reg?.name ?? 'cette région'} s'ouvre quand sa Ligue est battue (chaque région a la sienne, jouable sur place) — le bot joue en ${fb}`);
+      return false;
+    }
     const st = actState();
     if (st.rebattleFails?.day === utcDay() && st.rebattleFails.n >= CONFIG.rebattleMaxTries) { actLog('rb', `🏅 Revanche : ${st.rebattleFails.n} défaites aujourd'hui — reprise demain, le bot joue en ${fb}`); return false; }
     if (rb.step === 0) {
@@ -2800,10 +2821,9 @@
 
   /* Revanche du Conseil 4 (paliers bronze → diamant, 5 combats sans Centre) */
   const rebattleTiers = () => Rt.D.config.events?.rebattle?.tiers ?? [];
-  function rebattleState(save = readSave()) {
-    const region = regionId(save);
+  function rebattleState(save = readSave(), region = regionId(save)) {
     const reg = Rt.D.regions[region];
-    const league = reg?.leagueAreaId && save?.areaProgress?.[reg.leagueAreaId];
+    const league = reg?.leagueAreaId && progressOf(save, reg.leagueAreaId);
     const lineups = Rt.D.config.rebattleLineups?.[region] ?? {};
     const tiers = rebattleTiers();
     if (!tiers.length || !tiers.every((t) => (lineups[t.id] ?? []).length) || !(league?.cleared || league?.bossDefeated)) return null;
@@ -3157,7 +3177,7 @@
     for (const it of Object.values(Rt.D.items)) {
       const dex = it.effect?.kind === 'fossil' ? it.effect.dex : null;
       if (!dex || got.has(dex) || !Rt.D.species[dex] || !inRegionDex(dex, region) || !itemOn(it.key)) continue;
-      const areas = Rt.D.areaList.filter((a) => a.regionId === region && (a.lootPool ?? []).some((l) => l.itemKey === it.key && (l.weight ?? 1) > 0)).map((a) => a.id);
+      const areas = Rt.D.areaList.filter((a) => areaRegion(a) === region && (a.lootPool ?? []).some((l) => l.itemKey === it.key && (l.weight ?? 1) > 0)).map((a) => a.id);
       out.push({ key: it.key, dex, price: it.price ?? Infinity, inShop: !!it.inShop && (it.shopBadges ?? 0) <= badges, areas });
     }
     return out;
@@ -3890,7 +3910,7 @@
   }
   /** Région suivante ouverte (Ligue de la région courante battue) et jamais jouée. */
   function newRegionOpen(save = readSave()) {
-    const cur = Rt.D.regions[save?.region ?? regionId(save)];
+    const cur = Rt.D.regions[regionId(save)];
     const next = cur?.nextRegion && Rt.D.regions[cur.nextRegion];
     if (!next || next.enabled === false) return null;
     const league = cur.leagueAreaId && save?.areaProgress?.[cur.leagueAreaId];
@@ -3905,7 +3925,7 @@
    */
   function regionSwitchDue(save = readSave()) {
     const st = regionSwitchStatus(save);
-    return st.due ? st.next : null;
+    return st.due ? { ...st.next, played: !!st.played } : null;
   }
   /**
    * Changement de région : dû ou non, et pourquoi (affiché dans le panneau).
@@ -3913,7 +3933,38 @@
    * v1.11.0, une revanche « prête » bloquait le départ alors qu'en Progression elle ne démarrait jamais).
    * @returns {{next:object|null, due:boolean, why:string}}
    */
+  const regionPlayed = (save, rid) => isHereRegion(save, rid) || !!save?.parked?.[rid];
+  function regionLeagueWon(save, rid) {
+    const reg = Rt.D.regions[rid];
+    const p = reg?.leagueAreaId && progressOf(save, reg.leagueAreaId);
+    return !!(p?.cleared || p?.bossDefeated);
+  }
+  /**
+   * Retour dans une région DÉJÀ jouée (Zones → Régions → sa carte) :
+   *  - mode Revanche : la région courante n'a plus de revanche disponible mais une autre si (le jeu ne propose que celle
+   *    de la région où l'on joue) ;
+   *  - autres modes : la Ligue de la région courante est battue et une région plus avancée, déjà jouée, ne l'est pas
+   *    (ex. revenu à Kanto pour la revanche → retour à Johto).
+   * @returns {object|null} la région visée
+   */
+  function playedRegionTarget(save = readSave()) {
+    const here = regionId(save);
+    const played = regionsSorted().filter((r) => r.id !== here && regionPlayed(save, r.id));
+    if (CONFIG.activity === 'rebattle') {
+      if (eventOpen('rebattle', save) && rebattleState(save, here)) return null;
+      return played.find((r) => rebattleState(save, r.id)) ?? null;
+    }
+    if (CONFIG.activity || !CONFIG.autoRegion || !regionLeagueWon(save, here)) return null;
+    // Pokédex : captures — on ne quitte pas une région où il reste des espèces sauvages à capturer
+    if (CONFIG.mode === 'pokedex' && Rt.D.areaList.some((a) => areaRegion(a) === here && isUnlocked(a, save) && !dexStalled(a) && missingSpecies(a, save, CONFIG.dexFocus).length)) return null;
+    return [...played].reverse().find((r) => !regionLeagueWon(save, r.id)) ?? null;
+  }
   function regionSwitchStatus(save = readSave()) {
+    const back = playedRegionTarget(save);
+    if (back) {
+      if (!CONFIG.autoRegion) return { next: back, played: true, due: false, why: 'changement automatique désactivé (« Changer de région une fois la Ligue battue »)' };
+      return { next: back, played: true, due: true, why: CONFIG.activity === 'rebattle' ? `Revanche du Conseil 4 disponible à ${back.name}` : `${back.name} n'est pas finie` };
+    }
     const next = newRegionOpen(save);
     if (!next) return { next: null, due: false, why: 'aucune nouvelle région ouverte (bats la Ligue de la région)' };
     if (!CONFIG.autoRegion) return { next, due: false, why: 'changement automatique désactivé (« Changer de région une fois la Ligue battue »)' };
@@ -3922,8 +3973,8 @@
     if (CONFIG.activity) return { next, due: false, why: `pas en mode ${MODES[CONFIG.activity].label} (seulement Progression, Farm et Pokédex : captures)` };
     if (!['progression', 'farm', 'catch'].includes(mode)) return { next, due: false, why: `pas en mode ${MODES[CONFIG.modeKey ?? CONFIG.mode].label} (seulement Progression, Farm et Pokédex : captures)` };
     if (mode === 'catch') {
-      const region = save?.region ?? regionId(save);
-      const left = Rt.D.areaList.filter((a) => a.regionId === region && isUnlocked(a, save) && !dexStalled(a) && missingSpecies(a, save, 'catch').length);
+      const region = regionId(save);
+      const left = Rt.D.areaList.filter((a) => areaRegion(a) === region && isUnlocked(a, save) && !dexStalled(a) && missingSpecies(a, save, 'catch').length);
       if (left.length) return { next, due: false, why: `il reste des espèces à capturer : ${left.slice(0, 3).map((a) => Rt.areaLabel(a)).join(', ')}${left.length > 3 ? '…' : ''}` };
     }
     const rb = eventOpen('rebattle', save) ? rebattleState(save) : null;
@@ -3935,11 +3986,20 @@
   async function regionTick(save) {
     const next = mem.regionGo ?? regionSwitchDue(save);
     if (!next) return false;
-    if (!mem.regionGo) { mem.regionGo = next; mem.regionTries = 0; log(`🧭 ${Rt.D.regions[save?.region]?.name ?? 'région'} terminée → cap sur ${next.name} (partenaire : ${Rt.nameOf(starterFor(next.id))})`); }
+    if (!mem.regionGo) {
+      mem.regionGo = next; mem.regionTries = 0;
+      log(next.played ? `🧭 retour à ${next.name} (${regionSwitchStatus(save).why})` : `🧭 ${Rt.D.regions[regionId(save)]?.name ?? 'région'} terminée → cap sur ${next.name} (partenaire : ${Rt.nameOf(starterFor(next.id))})`);
+    }
+    // Arrivé (région déjà jouée : pas d'écran de partenaire)
+    if (next.played && regionId(save) === next.id) { log(`🧭 ${next.name} : on y est`); mem.regionGo = null; mem.regionTries = 0; mem.travelFail.clear(); return false; }
     if (partnerDialog()) return false; // l'écran du partenaire est traité par la boucle
     if (++mem.regionTries > 25) { log(`⚠️ changement de région vers ${next.name} impossible pour l'instant — fais-le à la main (Zones → Régions)`); mem.regionFail = true; mem.regionGo = null; return false; }
     const d = dialog();
-    const step = btn('ui.region.goTo', { scope: d ?? document }) ?? btn('ui.partner.enter') ?? btn('ui.region.see');
+    // Région déjà jouée : sa carte dans l'onglet Régions (« Kanto : passer à cette région et voir ses zones »)
+    const goRe = Rt.re('ui.home.regionGo');
+    const card = next.played && $$('button[aria-label]', d ?? document).find((x) => visible(x) && goRe.test(norm(x.getAttribute('aria-label'))) && norm(x.getAttribute('aria-label')).startsWith(norm(next.name)));
+    if (card) { card.click(); return true; }
+    const step = !next.played && (btn('ui.region.goTo', { scope: d ?? document }) ?? btn('ui.partner.enter') ?? btn('ui.region.see'));
     if (step) { step.click(); return true; }
     // Liste des zones ouverte : onglet « Régions »
     const regionsTab = d && btn('ui.home.regions', { scope: d });
@@ -4565,8 +4625,8 @@
     fillAreas() {
       if (!this.areaSel || !Rt.E) return;
       const save = readSave();
-      const region = currentArea(save)?.regionId ?? save?.region;
-      const opts = Rt.D.areaList.filter((a) => a.regionId === region && save?.areaProgress?.[a.id]);
+      const region = regionId(save);
+      const opts = Rt.D.areaList.filter((a) => areaRegion(a) === region && save?.areaProgress?.[a.id]);
       this.areaSel.replaceChildren(...opts.map((a) => {
         const miss = missingSpecies(a, save).length;
         const g = goldPerEncounter(a, save);
@@ -4644,7 +4704,7 @@
   }
 
   const api = { itemEvolutions, evolutionTargets, healTierFor, shopTiers, bot, CONFIG, MODES, DEFAULTS, setMode, setOption, resetOptions, setTeamLock, bossMatchup, bossTeam, journal, Rt, mem, readBattle, teamMons, boxMons,
-    upgradeCandidates, rebattleThreats, bestTeamVs, rebattlePlan, starterFor, newRegionOpen, regionSwitchDue, regionSwitchStatus, partnerDialog, regionTick, playPartner, stoneNeeds, stoneGoldShortfall, consumablesReserve, centerCandidates, comboGains, catchScreenDex, captureParam, ballItemOf, upgradePick, xpShare, usefulXp, pickTrainees, catchOnlyDex, wildShare, dexWorthEvolving, dexUsefulEvolutions, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, raidStatus, progressOf, pokedexOf, rebattleActivity, simulateGauntlet, bestGauntletTeam, rebattleUpgrade, battleItems, ensureRaidTeam, openRaids, nextRaid, playRaidPage, playCatch, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
+    upgradeCandidates, rebattleThreats, bestTeamVs, rebattlePlan, starterFor, newRegionOpen, regionSwitchDue, regionSwitchStatus, playedRegionTarget, partnerDialog, regionTick, playPartner, stoneNeeds, stoneGoldShortfall, consumablesReserve, centerCandidates, comboGains, catchScreenDex, captureParam, ballItemOf, upgradePick, xpShare, usefulXp, pickTrainees, catchOnlyDex, wildShare, dexWorthEvolving, dexUsefulEvolutions, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, raidStatus, progressOf, pokedexOf, rebattleActivity, simulateGauntlet, bestGauntletTeam, rebattleUpgrade, battleItems, ensureRaidTeam, openRaids, nextRaid, playRaidPage, playCatch, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
     areaThreats, missingSpecies, desiredArea, buildData, Engine,
     obtainedDex, fossilTargets, catchTargetDex, targetArea, wantLuck, canBreed, dayCarePick, dayCareDue, eventOpen, rebattleState, rebattleMatchup, rebattleDue,
     raidBossHp, raidOdds, raidTrainee, parseSchedule, scheduledMode, Stats, noteCatchResult, notify, WakeLock };

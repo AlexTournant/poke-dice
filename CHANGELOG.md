@@ -6,6 +6,21 @@ Chaque section `## [X.Y.Z]` correspond à un tag `vX.Y.Z`. Les notes de la relea
 
 ## [Non publié]
 
+## [1.11.3]
+
+### Corrigé
+
+- Régions : à Johto, la Progression (et le mode de repli des Raids / de la Revanche) repartait sur la Route 1 de **Kanto**. Le bot déduisait la région courante de la zone courante, et comparait `area.regionId` tel quel, alors que dans le jeu une zone sans `regionId` est à Kanto. Il utilise maintenant les règles du jeu : région courante = `save.region`, région d'une zone = `regionId` ou Kanto. Garde-fous ajoutés :
+  - le bot ne va jamais dans une zone d'une autre région ;
+  - si la zone courante enregistrée est d'une autre région, il repart de la première zone non terminée de la région courante.
+
+### Ajouté
+
+- Retour dans une région déjà jouée (Zones → Régions → sa carte) :
+  - **mode Revanche du Conseil 4** : le jeu ne propose que la revanche de la région où l'on joue. Si elle n'est pas disponible ici (Ligue de Johto pas encore battue) mais l'est ailleurs (Kanto), le bot y retourne ;
+  - **Progression / Farm** : si la Ligue de la région courante est gagnée et qu'une région plus avancée, déjà jouée, ne l'est pas, le bot y retourne (Kanto → Johto après la revanche). Pas en Pokédex : captures tant qu'il reste des espèces à capturer.
+- Revanche : le message dit si la revanche de la région n'est pas encore ouverte (Ligue à battre), au lieu de « tous les paliers terminés ».
+
 ## [1.11.2]
 
 ### Corrigé
