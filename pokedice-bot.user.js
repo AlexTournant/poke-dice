@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pokédice Autopilot
 // @namespace    pokedice-bot
-// @version      1.9.0
+// @version      1.10.0
 // @description  Joue à Pokédice — modes Progression / Pokédex / Farm / Versus / Raids : combats optimisés, soins, captures, boutique, améliorations, Centre, zones.
 // @match        https://poke-dice.netlify.app/*
 // @grant        none
@@ -204,6 +204,7 @@
     farm: { label: 'Farm', stock: { heal: 5, ball: 8, rareBall: 3, cure: 1, ether: 1, bait: 2 }, lockTeam: true, trainWeakest: false },
     versus: { label: 'Versus', activity: true },
     raid: { label: 'Raids', activity: true },
+    rebattle: { label: 'Revanche du Conseil 4', activity: true },
   };
   const DEFAULTS = JSON.parse(JSON.stringify(CONFIG)); // valeurs d'usine (bouton "Réinitialiser" du panneau)
   const SETTINGS_KEY = 'pokebot.settings';
@@ -2705,7 +2706,37 @@
       log(`🐉 Raid : cap sur ${r.key === 'daily' ? 'le raid du jour' : Rt.nameOf(r.dex)}`);
       return navTo(r.path);
     }
+    if (CONFIG.activity === 'rebattle') return rebattleActivity(save);
     return false;
+  }
+
+  /**
+   * Mode « Revanche du Conseil 4 » : le Centre compose la meilleure équipe contre tout le palier (même sous le seuil
+   * de préparation), puis le bot ouvre la revanche depuis sa carte de l'accueil et enchaîne les combats.
+   * Un palier déjà commencé (« Combat 2 sur 5 ») se continue tel quel : l'équipe ne peut plus changer.
+   */
+  function rebattleActivity(save) {
+    const fb = MODES[CONFIG.mode].label;
+    if (!eventOpen('rebattle', save)) { actLog('rb', `🔒 Revanche du Conseil 4 fermée (bats la Ligue de la région) — le bot joue en ${fb} en attendant`); return false; }
+    const rb = rebattleState(save);
+    if (!rb) { actLog('rb', `🏅 Revanche du Conseil 4 : tous les paliers de cette région sont terminés — le bot joue en ${fb}`); return false; }
+    const st = actState();
+    if (st.rebattleFails?.day === utcDay() && st.rebattleFails.n >= CONFIG.rebattleMaxTries) { actLog('rb', `🏅 Revanche : ${st.rebattleFails.n} défaites aujourd'hui — reprise demain, le bot joue en ${fb}`); return false; }
+    if (rb.step === 0) {
+      const plan = rebattlePlan(save);
+      const team = new Set(save?.team ?? []);
+      if (plan && !plan.team.every((m) => team.has(m.id))) {
+        actLog('rb', `🏅 Revanche ${rb.tier.id} : équipe ${plan.team.map((m) => m.name).join(' + ')} en préparation au prochain Centre`);
+        return false;
+      }
+      if (plan && !plan.ready) actLog('rbw', `🏅 Revanche ${rb.tier.id} : meilleure équipe possible (duel moyen ${plan.avg.toFixed(2)}, pire ${plan.worst.toFixed(2)}) — on tente`);
+    }
+    mem.errand = 'rebattle'; mem.errandAt = Date.now();
+    log(`🏅 Revanche du Conseil 4 : palier ${rb.tier.id}${rb.step ? `, combat ${rb.step + 1}` : ''} — on y va`);
+    // La carte de l'accueil (« Revanche du Conseil 4, palier Bronze : ensuite, … Ouvrir »), sinon la page directement
+    const card = $$('button[aria-label]').find((x) => visible(x) && Rt.re('ui.events.rebattle.label').test(norm(x.getAttribute('aria-label'))));
+    if (card) { card.click(); return true; }
+    return navTo(ERRAND_PATH.rebattle);
   }
 
   /* ── 6.12 Routines : Roue de la fortune, Revanche du Conseil 4, Pension ──
@@ -3705,14 +3736,17 @@
    * atteint rebattleReadyScore sans Pokémon adverse sans réponse. Décision indépendante de l'équipe du moment.
    */
   function rebattlePlan(save = readSave()) {
-    if (!CONFIG.rebattle || !eventOpen('rebattle', save)) return null;
+    const dedicated = CONFIG.activity === 'rebattle';
+    if ((!CONFIG.rebattle && !dedicated) || !eventOpen('rebattle', save)) return null;
     const rb = rebattleState(save);
     if (!rb) return null;
     const sig = `${rb.region}|${rb.tier.id}|${rb.step}|${save?.box?.length}|${(save?.box ?? []).reduce((n, m) => n + m.level, 0)}`;
     if (mem.rbPlan?.sig !== sig) mem.rbPlan = { sig, plan: bestTeamVs(centerCandidates(save), rebattleThreats(rb)) };
     const plan = mem.rbPlan.plan;
-    if (!plan || plan.avg < CONFIG.rebattleReadyScore || plan.worst < CONFIG.bossWorstScore) return null;
-    return { rb, ...plan };
+    if (!plan) return null;
+    // Mode dédié : on joue avec la meilleure équipe possible ; sinon seulement si elle atteint le seuil
+    if (!dedicated && (plan.avg < CONFIG.rebattleReadyScore || plan.worst < CONFIG.bossWorstScore)) return null;
+    return { rb, ...plan, ready: plan.avg >= CONFIG.rebattleReadyScore && plan.worst >= CONFIG.bossWorstScore };
   }
 
   /* Régions */
@@ -4341,7 +4375,8 @@
           st.raidTrain?.until > Date.now() ? h('tr', {}, h('td', {}, '  entraînement raid'), h('td', { className: 'n' }, `contre ${Rt.nameOf(st.raidTrain.dex)}`)) : null,
           h('tr', {}, h('td', {}, 'Roue de la fortune'), h('td', { className: 'n' }, !eventOpen('wheel', save) ? 'fermée' : st.wheelDone === utcDay() ? 'tournée aujourd’hui' : 'tour gratuit dispo')),
           h('tr', {}, h('td', {}, 'Pension'), h('td', { className: 'n' }, !dayCareOpen(save) ? `verrouillée (${Rt.D.config.dayCare?.unlockPokedex ?? 20} espèces)` : dayCareOf(save).egg ? 'un Œuf attend' : (dayCareOf(save).residents ?? []).map((x) => Rt.nameOf(x.inst?.dex)).join(' + ') || 'vide')),
-          h('tr', {}, h('td', {}, 'Revanche du Conseil 4'), h('td', { className: 'n' }, (() => { const rb = save && eventOpen('rebattle', save) ? rebattleState(save) : null; return rb ? `palier ${rb.tier.id}, combat ${rb.step + 1}` : 'fermée ou terminée'; })()))),
+          h('tr', {}, h('td', {}, 'Revanche du Conseil 4'), h('td', { className: 'n' }, (() => { const rb = save && eventOpen('rebattle', save) ? rebattleState(save) : null; return rb ? `palier ${rb.tier.id}, combat ${rb.step + 1}` : 'fermée ou terminée'; })())),
+          (() => { const pl = save && CONFIG.activity === 'rebattle' ? rebattlePlan(save) : null; return pl ? h('tr', {}, h('td', {}, '  équipe de revanche'), h('td', { className: 'n' }, `${pl.team.map((m) => m.name).join(' + ')} (${pl.avg.toFixed(2)})`)) : null; })()),
         mem.vsField?.length && n50 >= 3 ? (() => { const d = bestDefenseTeam(save, mem.vsField); return d ? h('div', { className: 'muted' }, `Défense conseillée : ${d.dex.map((x) => Rt.nameOf(x)).join(' → ')} — repousse ${d.held}/${d.total} équipes connues`) : null; })() : null,
         st.vsDefenseAt ? h('div', { className: 'muted' }, `Dernière équipe de défense : ${new Date(st.vsDefenseAt).toLocaleString()}`) : null,
         h('div', { className: 'btns' },
@@ -4458,7 +4493,7 @@
   }
 
   const api = { itemEvolutions, evolutionTargets, healTierFor, shopTiers, bot, CONFIG, MODES, DEFAULTS, setMode, setOption, resetOptions, setTeamLock, bossMatchup, bossTeam, journal, Rt, mem, readBattle, teamMons, boxMons,
-    upgradeCandidates, rebattleThreats, bestTeamVs, rebattlePlan, starterFor, newRegionOpen, regionSwitchDue, regionTick, playPartner, stoneNeeds, stoneGoldShortfall, consumablesReserve, centerCandidates, comboGains, catchScreenDex, captureParam, ballItemOf, upgradePick, xpShare, usefulXp, pickTrainees, catchOnlyDex, wildShare, dexWorthEvolving, dexUsefulEvolutions, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, battleItems, ensureRaidTeam, openRaids, nextRaid, playRaidPage, playCatch, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
+    upgradeCandidates, rebattleThreats, bestTeamVs, rebattlePlan, starterFor, newRegionOpen, regionSwitchDue, regionTick, playPartner, stoneNeeds, stoneGoldShortfall, consumablesReserve, centerCandidates, comboGains, catchScreenDex, captureParam, ballItemOf, upgradePick, xpShare, usefulXp, pickTrainees, catchOnlyDex, wildShare, dexWorthEvolving, dexUsefulEvolutions, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, rebattleActivity, battleItems, ensureRaidTeam, openRaids, nextRaid, playRaidPage, playCatch, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
     areaThreats, missingSpecies, desiredArea, buildData, Engine,
     obtainedDex, fossilTargets, catchTargetDex, targetArea, wantLuck, canBreed, dayCarePick, dayCareDue, eventOpen, rebattleState, rebattleMatchup, rebattleDue,
     raidBossHp, raidOdds, raidTrainee, parseSchedule, scheduledMode, Stats, noteCatchResult, notify, WakeLock };

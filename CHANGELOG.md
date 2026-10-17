@@ -6,6 +6,12 @@ Chaque section `## [X.Y.Z]` correspond à un tag `vX.Y.Z`. Les notes de la relea
 
 ## [Non publié]
 
+## [1.10.0]
+
+### Ajouté
+
+- Mode « Revanche du Conseil 4 », à part, comme Versus et Raids (sélecteur de mode). Le Centre compose la meilleure équipe possible contre tout le palier, même sous le seuil de préparation. Le bot ouvre ensuite la revanche depuis sa carte de l'accueil (« Revanche du Conseil 4, palier Bronze : ensuite, … Ouvrir ») et enchaîne les combats. Un palier commencé (« Combat 2 sur 5 ») se continue tel quel. Défaites : au plus `rebattleMaxTries` par jour, puis le mode de repli joue en attendant le lendemain. Palier fini ou revanche fermée : le mode de repli joue.
+
 ## [1.9.0]
 
 ### Ajouté
