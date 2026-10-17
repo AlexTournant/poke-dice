@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    # Nom du check à exiger dans la protection de la branche main : « CI »
+    name: CI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # nécessaire pour comparer @version avec la branche cible
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Syntaxe du script
+        run: npm run check
+
+      - name: Tests (moteur + décisions)
+        run: npm test
+
+      - name: "Version incrémentée et CHANGELOG à jour"
+        if: github.event_name == 'pull_request'
+        run: node scripts/check-version.js --base "origin/${{ github.base_ref }}"

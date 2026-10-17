@@ -8,6 +8,8 @@ Bot Tampermonkey qui joue à [Pokédice](https://poke-dice.netlify.app/) à votr
 2. Créer un nouveau script et coller le contenu de `pokedice-bot.user.js`, ou l'ouvrir directement depuis le gestionnaire.
 3. Ouvrir https://poke-dice.netlify.app/ : une barre apparaît en haut à gauche.
 
+La dernière version publiée peut aussi être téléchargée directement : https://github.com/AlexTournant/poke-dice/releases/latest/download/pokedice-bot.user.js
+
 ## Utilisation
 
 | Élément | Rôle |
@@ -46,26 +48,28 @@ Un registre (onglet « Bilan » du panneau) suit les gains, dépenses et consomm
 Aucune dépendance : Node 18+ suffit.
 
 ```bash
-node --test pokedice-bot.test.js   # moteur pur
-node --test test/                  # décisions métier
+npm test          # moteur pur + décisions métier
+npm run check     # syntaxe du script
 ```
 
 Les tests de `test/` chargent le script dans un faux DOM (`test/dom-stub.js`) et s'appuient sur une sauvegarde simulée.
 
+La CI (GitHub Actions) lance les mêmes contrôles à chaque pull request et bloque la fusion en cas d'échec : voir [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Versions
 
-Le numéro de version est dans l'en-tête `@version` du script. Le journal des modifications n'est pas encore tenu dans un fichier séparé.
+Le numéro de version est dans l'en-tête `@version` du script. Les changements sont listés dans [CHANGELOG.md](CHANGELOG.md). Chaque version est publiée par tag (`vX.Y.Z`) avec une release GitHub : voir [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Mise à jour automatique (optionnel)
 
-Pour que Tampermonkey mette le script à jour depuis un dépôt Git, ajouter dans l'en-tête, à l'URL *raw* du fichier :
+Pour que Tampermonkey mette le script à jour depuis le dépôt, ajouter dans l'en-tête, à l'URL *raw* du fichier :
 
 ```js
-// @updateURL    https://raw.githubusercontent.com/<compte>/<depot>/main/pokedice-bot.user.js
-// @downloadURL  https://raw.githubusercontent.com/<compte>/<depot>/main/pokedice-bot.user.js
+// @updateURL    https://raw.githubusercontent.com/AlexTournant/poke-dice/main/pokedice-bot.user.js
+// @downloadURL  https://raw.githubusercontent.com/AlexTournant/poke-dice/main/pokedice-bot.user.js
 ```
 
-Chaque publication doit alors incrémenter `@version`, sinon Tampermonkey ne proposera pas la mise à jour.
+La branche `main` est protégée : elle ne reçoit que du code validé par la CI. Chaque modification du script doit incrémenter `@version`, sinon Tampermonkey ne proposera pas la mise à jour.
 
 ## Avertissements
 

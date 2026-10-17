@@ -1,0 +1,13 @@
+{
+  "name": "pokedice-autopilot",
+  "private": true,
+  "description": "Bot Tampermonkey pour Pokédice. Userscript sans dépendance : les scripts npm ne font que lancer Node.",
+  "scripts": {
+    "test": "node --test pokedice-bot.test.js test/decisions.test.js",
+    "check": "node --check pokedice-bot.user.js",
+    "version:check": "node scripts/check-version.js --base origin/main"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,0 +1,5 @@
+node_modules/
+release-notes.md
+*.log
+.DS_Store
+Thumbs.db

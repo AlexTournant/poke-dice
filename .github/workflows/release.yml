@@ -1,0 +1,38 @@
+name: Release
+
+# Déclenché par un tag vX.Y.Z poussé sur le dépôt (voir CONTRIBUTING.md)
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write # nécessaire pour créer la release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # nécessaire pour vérifier que le tag est sur main
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Tests
+        run: npm test
+
+      - name: Tag = @version, commit sur main, section CHANGELOG
+        run: node scripts/check-version.js --tag "$GITHUB_REF_NAME"
+
+      - name: Notes de version (extraites du CHANGELOG)
+        run: node scripts/check-version.js --notes "$GITHUB_REF_NAME" > "$RUNNER_TEMP/notes.md"
+
+      - name: Publier la release GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "$GITHUB_REF_NAME" pokedice-bot.user.js
+          --title "Pokédice Autopilot $GITHUB_REF_NAME"
+          --notes-file "$RUNNER_TEMP/notes.md"
