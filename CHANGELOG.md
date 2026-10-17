@@ -6,6 +6,21 @@ Chaque section `## [X.Y.Z]` correspond à un tag `vX.Y.Z`. Les notes de la relea
 
 ## [Non publié]
 
+## [1.7.2]
+
+### Corrigé
+
+- Capture : une nouvelle espèce pouvait recevoir une Ball faible, voire « Sans Ball ». Le bot décidait « nouvelle espèce » sur la carte de rencontre ; quand l'espèce n'y était pas lisible, il la traitait comme déjà capturée. Il lit maintenant l'espèce sur l'écran de capture (« Le Pikachu est épuisé ! ») et la compare au Pokédex.
+- Capture : les Balls sont reconnues par leur nom traduit **et** par leur nom dans les données du jeu. Sans ça, prix et bonus valaient 0 et la Master Ball n'était plus protégée.
+- Raids : le bot ne composait jamais l'équipe. Pour la remettre dans l'ordre, il la vidait ; le jeu désactive alors « Enregistrer », le bot ne reconnaissait plus la fenêtre et recliquait sur « Modifier » en boucle. La fenêtre est maintenant reconnue même quand « Enregistrer » est désactivé ; l'équipe est vidée d'un coup (« Effacer ») puis refaite dans l'ordre.
+- Raids : chaque Pokémon de la liste est identifié par son nom et son niveau. Le numéro de place affiché quand il est choisi changeait sa clé et empêchait de le retrouver.
+- Raids : le boss du raid du jour est lu dans la note « Recommandé : … contre {name} » de la fenêtre d'équipe, avant de chercher un nom dans la page.
+
+### Modifié
+
+- Capture : une nouvelle espèce reçoit toujours la Ball qui donne la meilleure chance, même si c'est une Hyper Ball (`catchNewPct` passe de 80 à 100). La Master Ball reste réservée aux légendaires. Le journal liste toutes les options et leur chance.
+- Mode « Pokédex : captures » : le Pokédex se remplit uniquement en capturant. Aucune évolution n'est provoquée, ni par entraînement ni par objet. C'est le rôle du mode « Pokédex : évolutions ».
+
 ## [1.7.1]
 
 ### Modifié

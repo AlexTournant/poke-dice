@@ -92,7 +92,7 @@ test('Balls : achète la Ball qui suffit pour chaque espèce manquante, pas plus
   const save = setup({ box: [['a', 16, 10]], team: ['a'], pokedex: [16], badges: 4, gold: 3000, inventory: {}, area: 'forest' });
   const plan = P.ballPlan(save);
   const by = Object.fromEntries(plan.species.map((x) => [x.dex, x]));
-  assert.equal(by[10].key, null, 'Chenipan (difficulté 2) : 83 % sans Ball, au-dessus du seuil de 80 %');
+  assert.equal(by[10].key, 'poke-ball', 'Chenipan (difficulté 2) : la Poké Ball donne 100 % (nouvelle espèce : la meilleure chance)');
   assert.equal(by[25].key, 'ultra-ball', 'Pikachu : aucune Ball n’atteint 90 % → la meilleure (67 %)');
   const wish = P.shopWishlist(save);
   const rare = wish.find((w) => w.key === 'ultra-ball');
@@ -135,11 +135,13 @@ test('capture : règle du seuil de 80 % (meilleure Ball si aucune ne l’atteint
     { t: 'super', pct: 83, price: 50, bonus: 2 }, { t: 'hyper', pct: 100, price: 100, bonus: 3 },
   ];
   assert.equal(P.chooseBall(high, {}).t, 'super', 'option seuil, meilleure ≥ 80 % : on descend à la moins chère qui reste ≥ 80 %');
-  assert.equal(P.chooseBall(high, { rare: true, why: 'nouvelle espèce' }).t, 'super', 'nouvelle espèce : même règle');
+  assert.equal(P.chooseBall(high, { rare: true, why: 'nouvelle espèce' }).t, 'hyper', 'nouvelle espèce : la meilleure chance par défaut, quitte à payer l’Hyper Ball');
+  P.setOption('catchNewPct', 80, { persist: false });
+  assert.equal(P.chooseBall(high, { rare: true, why: 'nouvelle espèce' }).t, 'super', 'nouvelle espèce avec un seuil de 80 % : la moins chère au-dessus');
   assert.equal(P.chooseBall(high, { rare: true, why: 'chromatique' }).t, 'hyper', 'chromatique : toujours la meilleure chance');
   P.setOption('catchNewPct', 100, { persist: false });
   assert.equal(P.chooseBall(high, { rare: true, why: 'nouvelle espèce' }).t, 'hyper', 'seuil 100 : toujours la meilleure');
-  P.setOption('catchNewPct', 80, { persist: false });
+  P.setOption('catchNewPct', 100, { persist: false });
   P.setOption('catchKnown', 'cheap', { persist: false });
 });
 
@@ -719,4 +721,84 @@ test('Combos : calcul rapide même avec une grosse équipe et des relances', () 
   const g = P.comboGains(save, Array.from({ length: 9 }, () => ({ m: mon, w: 1 })));
   assert.ok(performance.now() - t0 < 300, `9 Pokémon à 6 dés : ${(performance.now() - t0).toFixed(0)} ms`);
   assert.ok(Object.values(g).filter((x) => x > 0).length >= 5, 'la plupart des combos ont un gain mesuré');
+});
+
+test('Capture : l’espèce lue sur l’écran de capture décide « nouvelle espèce », et le nom des Balls est reconnu', () => {
+  P.setMode('pokedex', { persist: false });
+  setup({ box: [['a', 16, 10]], team: ['a'], pokedex: [16] });
+  P.Rt.i18n.set('ui.catch.wornOut', '{who} {name} est épuisé !');
+  P.Rt.i18n.set('ui.catch.theWild', 'Le');
+  P.Rt.frNameToDex.set('PIKACHU', 25); P.Rt.frNameToDex.set('ROUCOOL', 16);
+  try {
+    document.body.innerText = ['Combat', 'Le Pikachu est épuisé !', 'LANCER POUR CAPTURER'].join('\n');
+    assert.equal(P.captureParam('ui.catch.wornOut', 'name'), 'PIKACHU', 'paramètre {name} lu, {who} ignoré');
+    assert.equal(P.catchScreenDex(), 25, 'Pikachu reconnu, même avec « Le » devant');
+    document.body.innerText = 'Le Roucool est épuisé !';
+    assert.equal(P.catchScreenDex(), 16);
+    // Nom des Balls : nom des données du jeu si la traduction ne correspond pas
+    P.Rt.D.items['great-ball'].name = 'Great Ball'; P.Rt.D.items['master-ball'].name = 'Master Ball';
+    assert.equal(P.ballItemOf('GREAT BALL, 3 RESTANTES : 67 % DE CHANCE')?.key, 'great-ball');
+    assert.equal(P.ballItemOf('MASTER BALL, 1 RESTANTES : 100 % DE CHANCE')?.key, 'master-ball', 'la Master Ball est reconnue (jamais lancée hors légendaire)');
+    assert.equal(P.ballItemOf('SANS BALL : 33 % DE CHANCE'), null);
+  } finally { document.body.innerText = ''; P.Rt.i18n.clear(); P.Rt.frNameToDex.clear(); }
+});
+
+/**
+ * Faux écran « Modifier l'équipe de raid », fidèle au jeu (e2e du bundle) :
+ * candidats = li > button[aria-pressed] avec <b>nom</b><small>N.x</small> et, s'il est choisi, <span class="light-scope">place</span> ;
+ * « Enregistrer » désactivé tant que l'équipe est vide ; « Effacer » vide tout ; 3 places au plus.
+ */
+function fakeRaidTeamDialog(cands, initial = []) {
+  let team = [...initial];
+  const el = (props) => Object.assign({ getClientRects: () => [1], getAttribute() { return null; }, dataset: {}, querySelector: () => null, querySelectorAll: () => [] }, props);
+  const mkCand = (c) => {
+    const b = el({ innerText: c.name }), small = el({ innerText: `N.${c.level}` });
+    const btnEl = el({
+      get innerText() { const i = team.indexOf(c.id); return `${c.name}\nN.${c.level}${i >= 0 ? '\n' + (i + 1) : ''}`; },
+      getAttribute: (k) => (k === 'aria-pressed' ? String(team.includes(c.id)) : null),
+      querySelector: (sel) => (sel === 'b' ? b : sel === 'small' ? small : sel.startsWith('span.light-scope') && team.includes(c.id) ? el({ innerText: String(team.indexOf(c.id) + 1) }) : null),
+      click: () => { team = team.includes(c.id) ? team.filter((x) => x !== c.id) : team.length >= 3 ? team : [...team, c.id]; },
+    });
+    return btnEl;
+  };
+  const candBtns = cands.map(mkCand);
+  const save = el({ innerText: 'ENREGISTRER', get disabled() { return team.length === 0; }, click() { save.saved = [...team]; } });
+  const clear = el({ innerText: 'EFFACER', get disabled() { return team.length === 0; }, click() { team = []; } });
+  const dialogEl = el({ innerText: 'Ton équipe de raid', querySelectorAll: (sel) => (sel === 'li button[aria-pressed]' ? candBtns : sel.startsWith('button') ? [...candBtns, clear, save] : []) });
+  return { dialogEl, save, get team() { return team; } };
+}
+
+test('Raid : l’équipe est refaite dans le bon ordre, même quand « Enregistrer » se désactive (équipe vide)', async () => {
+  P.setMode('progression', { persist: false });
+  setup({ box: [['a', 999, 50]], team: ['a'], pokedex: [999] });
+  addMon(7401, 'Feu', 'fire', 300); addMon(7402, 'Eau', 'water', 300); addMon(7403, 'Plante', 'grass', 300); addMon(7404, 'Roche', 'rock', 300); addMon(7405, 'BossFeu', 'fire', 900);
+  P.Rt.i18n.set('ui.raid.teamSave', 'Enregistrer'); P.Rt.i18n.set('ui.versus.clear', 'Effacer');
+  for (const [n, d] of [['FEU', 7401], ['EAU', 7402], ['PLANTE', 7403], ['ROCHE', 7404]]) P.Rt.frNameToDex.set(n, d);
+  P.Rt.D.config.events = { raid: { teamCap: 50, level: 50, barHp: 2.2, bars: 3 } };
+  const cands = [{ id: 'f', name: 'Feu', level: 50 }, { id: 'p', name: 'Plante', level: 50 }, { id: 'e', name: 'Eau', level: 50 }, { id: 'r', name: 'Roche', level: 50 }];
+  const ui = fakeRaidTeamDialog(cands, ['p', 'f']); // équipe actuelle : Plante, Feu (mauvaise contre un boss Feu)
+  const before = document.querySelectorAll;
+  document.querySelectorAll = (sel) => (sel === '[role=dialog]' ? [ui.dialogEl] : []);
+  try {
+    const r = { dex: 7405, bossLevel: 50, idle: 0 };
+    for (let i = 0; i < 12 && !r.teamDone; i++) assert.ok(await P.ensureRaidTeam(r), `étape ${i} : une action à chaque passage`);
+    assert.ok(r.teamDone, 'équipe terminée (plus de boucle sur « Modifier »)');
+    assert.ok(ui.save.saved, 'Enregistrer cliqué');
+    const v = { f: 7401, p: 7403, e: 7402, r: 7404 };
+    const expected = Object.keys(v).sort((x, y) => P.raidValue(v[y], 50, 7405, 50) - P.raidValue(v[x], 50, 7405, 50)).slice(0, 3);
+    assert.deepEqual(ui.save.saved, expected, 'les 3 meilleurs contre le boss, le meilleur en tête');
+    assert.ok(!ui.save.saved.includes('p'), 'pas de Plante contre un boss Feu');
+    assert.equal(ui.save.saved.length, 3);
+  } finally { document.querySelectorAll = before; P.Rt.i18n.clear(); P.Rt.frNameToDex.clear(); delete P.Rt.D.config.events; }
+});
+
+test('Pokédex : captures — aucun élève pour une évolution, le Pokédex se remplit par capture', () => {
+  const save = setup({ box: [['c', 999, 100], ['cat', 10, 5], ['pid', 16, 45]], team: ['c'], pokedex: [999, 10, 16] });
+  multiExp();
+  P.setMode('pokedex', { persist: false });
+  assert.ok(P.catchOnlyDex());
+  assert.ok(!P.pickTrainees(save, 3, new Set(['c'])).some((t) => /évolution/.test(t.why)), 'pas d’entraînement pour Chrysacier en mode captures');
+  P.setMode('pokedexEvo', { persist: false });
+  assert.match(P.pickTrainees(save, 3, new Set(['c']))[0].why, /évolution/, 'le mode évolutions, lui, entraîne Chenipan');
+  P.setMode('progression', { persist: false });
 });
