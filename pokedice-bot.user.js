@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pokédice Autopilot
 // @namespace    pokedice-bot
-// @version      1.7.2
+// @version      1.7.3
 // @description  Joue à Pokédice — modes Progression / Pokédex / Farm / Versus / Raids : combats optimisés, soins, captures, boutique, améliorations, Centre, zones.
 // @match        https://poke-dice.netlify.app/*
 // @grant        none
@@ -161,6 +161,9 @@
     raidDaily: true,              // raid du jour
     raidLegendary: true,          // raids légendaires des zones terminées
     raidMaxTries: 8,              // essais par raid et par jour avant d'aller s'entraîner
+    raidLoop: false,              // en boucle : aucun plafond d'essais ni arrêt sur estimation défavorable
+    raidTarget: '',               // raid choisi (« daily » ou « zone/dex ») ; vide = tous, raid du jour d'abord
+    raidOnlyMissing: true,        // seulement les raids d'espèces pas encore au Pokédex (le raid du jour est passé sinon)
     raidAutoTeam: true,           // compose l'équipe de raid contre le boss à chaque raid
     raidFriends: true,            // ajoute au groupe les amis dont l'équipe de raid est la plus recommandée contre le boss
     raidMinOdds: 0.6,             // dégâts estimés (toi + alliés) / PV totaux du boss : en dessous, on arrête après 2 défaites…
@@ -2283,17 +2286,42 @@
     for (const a of Rt.D.areaList) {
       const p = save?.areaProgress?.[a.id];
       if (!(p?.cleared || p?.bossDefeated)) continue;
-      for (const b of a.legendaryBoss ?? []) if (b.raid && !caught.has(b.dex)) out.push({ areaId: a.id, dex: b.dex, level: b.level, path: `/raid/${a.id}/${b.dex}`, key: `${a.id}/${b.dex}` });
+      for (const b of a.legendaryBoss ?? []) {
+        // fait = déjà capturé, ou noté par le jeu dans events.raidsDone (clé « zone:dex »)
+        if (!b.raid || caught.has(b.dex) || save?.events?.raidsDone?.includes(`${a.id}:${b.dex}`)) continue;
+        out.push({ areaId: a.id, dex: b.dex, level: b.level, path: `/raid/${a.id}/${b.dex}`, key: `${a.id}/${b.dex}` });
+      }
     }
     return out;
   }
-  /** Prochain raid à faire, ou null. */
+  /** Raids ouverts que le bot peut faire (raid du jour d'abord), sans tenir compte des essais. */
+  function openRaids(save = readSave()) {
+    const st = actState();
+    const out = [];
+    if (dailyRaidOpen(save) && st.raidDone !== utcDay()) out.push({ key: 'daily', path: '/events/raid', label: 'Raid du jour' });
+    for (const r of legendaryRaids(save)) out.push({ ...r, label: `${Rt.nameOf(r.dex)} · ${Rt.areaLabel(Rt.D.areas[r.areaId])}` });
+    return out;
+  }
+  /**
+   * Prochain raid à faire, ou null.
+   *  - raidTarget : un raid précis (« daily » ou « zone/dex ») ; vide = tous ceux autorisés, raid du jour d'abord ;
+   *  - raidLoop   : en boucle, sans plafond d'essais par jour ni arrêt sur estimation défavorable.
+   */
   function nextRaid(save = readSave()) {
     const st = actState();
     const day = utcDay();
     const tries = st.raidTries?.day === day ? st.raidTries : { day, n: {} };
-    if (CONFIG.raidDaily && dailyRaidOpen(save) && st.raidDone !== day && (tries.n.daily ?? 0) < CONFIG.raidMaxTries && !(st.raidSkip?.daily > Date.now())) return { key: 'daily', path: '/events/raid' };
-    if (CONFIG.raidLegendary) for (const r of legendaryRaids(save)) if ((tries.n[r.key] ?? 0) < CONFIG.raidMaxTries && !(st.raidSkip?.[r.key] > Date.now())) return r;
+    const ok = (r) => (CONFIG.raidLoop || (tries.n[r.key] ?? 0) < CONFIG.raidMaxTries) && (CONFIG.raidLoop || !(st.raidSkip?.[r.key] > Date.now()));
+    const open = openRaids(save);
+    if (CONFIG.raidTarget) {
+      const t = open.find((r) => r.key === CONFIG.raidTarget);
+      if (t) return ok(t) ? t : null;
+      if (mem.raidTargetLog !== CONFIG.raidTarget) { mem.raidTargetLog = CONFIG.raidTarget; log('🐉 Raid choisi indisponible (capturé, fait ou fermé) : retour au choix automatique'); }
+    }
+    for (const r of open) {
+      if (r.key === 'daily' ? !CONFIG.raidDaily : !CONFIG.raidLegendary) continue;
+      if (ok(r)) return r;
+    }
     return null;
   }
   const bumpRaidTry = (key) => {
@@ -2387,19 +2415,26 @@
         r.teamNames = scored.map((x) => `${x.name} N.${x.lvl}`);
         r.myValue = scored.reduce((n, x) => n + x.v, 0);
       }
-      // Ordre voulu : le meilleur mène. Les boutons choisis portent leur numéro de place (1, 2, 3).
-      const slot = (x) => +(x.querySelector('span.light-scope, span:last-child')?.innerText.trim() || 0);
-      const chosen = picks.filter((x) => x.getAttribute('aria-pressed') === 'true').sort((a, b) => slot(a) - slot(b)).map(keyOf);
-      const prefixOk = chosen.every((k, i) => k === r.teamPlan[i]);
-      if (!prefixOk) {
-        // Mauvais ordre ou mauvais Pokémon : on vide d'un coup (« Effacer »), puis on choisit dans l'ordre
+      // Ordre voulu : le meilleur mène. Un bouton choisi porte son numéro de place dans un <span class="light-scope">.
+      // (Avant la v1.7.3, le sélecteur « span:last-child » attrapait d'abord une case vide du sprite : l'ordre lu était
+      // toujours faux, le bot effaçait l'équipe après deux choix et recommençait en boucle.)
+      const slot = (x) => { const sp = $$('span', x).find((e) => /(^|\s)light-scope(\s|$)/.test(e.className ?? '')); return sp ? +sp.innerText.trim() || 0 : 0; };
+      const chosenEls = picks.filter((x) => x.getAttribute('aria-pressed') === 'true');
+      const chosen = chosenEls.map(keyOf);
+      const inPlan = chosen.every((k) => r.teamPlan.slice(0, chosen.length).includes(k));
+      const ordered = chosenEls.every((x) => slot(x) > 0) && [...chosenEls].sort((a, b) => slot(a) - slot(b)).map(keyOf).every((k, i) => k === r.teamPlan[i]);
+      // Équipe de départ à refaire : on vide d'un coup (« Effacer »), UNE seule fois, puis on choisit dans l'ordre
+      if (!r.cleared && chosen.length && !(inPlan && ordered)) {
+        r.cleared = true;
         const clear = btn('ui.versus.clear', { scope: d });
         if (clear) { clear.click(); return true; }
-        const first = picks.find((x) => x.getAttribute('aria-pressed') === 'true');
-        if (first) { first.click(); return true; }
       }
-      const next = r.teamPlan[chosen.length];
-      if (prefixOk && next && chosen.length < 3) {
+      r.cleared = true;
+      // Un Pokémon hors plan encore choisi (Effacer absent) : on le retire, lui seul
+      const stray = chosenEls.find((x) => !r.teamPlan.includes(keyOf(x)));
+      if (stray) { stray.click(); return true; }
+      const next = r.teamPlan.find((k) => !chosen.includes(k));
+      if (next && chosen.length < 3) {
         const b = picks.find((x) => x.getAttribute('aria-pressed') !== 'true' && keyOf(x) === next);
         if (b) { b.click(); return true; }
         log(`⚠️ Raid : ${next.split('|')[0]} introuvable dans la liste, on garde ${chosen.length} Pokémon`);
@@ -2488,16 +2523,23 @@
       const n = bumpRaidTry(r.key);
       if (bodyHas('ui.raid.result.lostTitle')) Stats.add('raidsLost');
       // Défaite nette prévue par l'estimation : inutile d'enchaîner les essais, on s'entraîne
-      if (bodyHas('ui.raid.result.lostTitle') && r.odds != null && r.odds < CONFIG.raidMinOdds && n >= 2) {
+      if (!CONFIG.raidLoop && bodyHas('ui.raid.result.lostTitle') && r.odds != null && r.odds < CONFIG.raidMinOdds && n >= 2) {
         const st = actState();
         setActState({ raidSkip: { ...st.raidSkip, [r.key]: Date.now() + msToUtcMidnight() }, ...(CONFIG.raidTrain && r.dex && { raidTrain: { dex: r.dex, level: r.bossLevel ?? raidCfg()?.level ?? 50, until: Date.now() + 7 * 864e5 } }) });
         log(`🛑 Raid : ${n} défaites, dégâts estimés ${Math.round(r.odds * 100)} % des PV du boss (< ${Math.round(CONFIG.raidMinOdds * 100)} %) → on arrête pour aujourd'hui${CONFIG.raidTrain ? ' et on entraîne un contre au Centre' : ''}`);
         mem.raid = null; return goHome();
       }
-      if (n >= CONFIG.raidMaxTries) { log(`🛑 Raid : ${n} essais sans capture aujourd'hui — on s'entraîne et on revient demain`); mem.raid = null; return goHome(); }
-      log(`🔁 Raid : essai ${n + 1}/${CONFIG.raidMaxTries}`);
+      if (!CONFIG.raidLoop && n >= CONFIG.raidMaxTries) { log(`🛑 Raid : ${n} essais sans capture aujourd'hui — on s'entraîne et on revient demain`); mem.raid = null; return goHome(); }
+      log(`🔁 Raid : essai ${n + 1}${CONFIG.raidLoop ? ' (en boucle)' : '/' + CONFIG.raidMaxTries}`);
       btn('ui.raid.again').click();
       return true;
+    }
+    // Raid du jour d'une espèce déjà au Pokédex : passé (réglage raidOnlyMissing), sauf combat ou capture en cours
+    if (r.key === 'daily' && CONFIG.raidOnlyMissing && r.dex && !btn('ui.raid.again') && obtainedDex(readSave()).has(r.dex) && !lineHas('ui.raid.result.caught')) {
+      setActState({ raidDone: utcDay() });
+      log(`🐉 Raid du jour : ${Rt.nameOf(r.dex)} est déjà au Pokédex → passé`);
+      mem.raid = null;
+      return goHome();
     }
     if (lineHas('ui.raid.result.caught') || bodyHas('ui.events.raid.caught') || (r.dex && (readSave()?.pokedex ?? []).includes(r.dex) && r.key !== 'daily')) {
       if (r.key === 'daily') setActState({ raidDone: utcDay() });
@@ -3798,6 +3840,8 @@
         { p: 'raidDaily', t: 'bool', l: 'Raid du jour' },
         { p: 'raidLegendary', t: 'bool', l: 'Raids légendaires (zones terminées)' },
         { p: 'raidMaxTries', t: 'num', l: 'Essais max par raid et par jour', min: 1, max: 50 },
+        { p: 'raidLoop', t: 'bool', l: 'En boucle (pas de plafond d’essais, pas d’arrêt sur estimation)' },
+        { p: 'raidOnlyMissing', t: 'bool', l: 'Seulement les espèces pas encore au Pokédex' },
         { p: 'raidAutoTeam', t: 'bool', l: 'Choisir l’équipe de raid contre le boss' },
         { p: 'raidFriends', t: 'bool', l: 'Ajouter des amis au groupe (compte connecté)' },
         { p: 'raidMinOdds', t: 'pct', l: 'Arrêter après 2 défaites si dégâts estimés <', h: 'Dégâts attendus du groupe / PV totaux du boss.' },
@@ -3981,7 +4025,13 @@
       const best = n50 >= 3 ? bestVersusTeam(save, []) : null;
       const c = raidCfg();
       const r = save ? nextRaid(save) : null;
+      const raidSel = h('select', { onchange: () => { setOption('raidTarget', raidSel.value); mem.raidTargetLog = null; this.renderPanel(); } });
+      raidSel.add(new Option('Automatique (tous, raid du jour d’abord)', '', false, !CONFIG.raidTarget));
+      for (const o of save ? openRaids(save) : []) raidSel.add(new Option(o.label, o.key, false, o.key === CONFIG.raidTarget));
+      if (CONFIG.raidTarget && ![...raidSel.options].some((o) => o.value === CONFIG.raidTarget)) raidSel.add(new Option(`${CONFIG.raidTarget} (indisponible)`, CONFIG.raidTarget, false, true));
       return [
+        h('h4', {}, 'Raid à lancer'),
+        h('label', { className: 'f', title: 'Le mode Raids va sur ce raid ; « Automatique » enchaîne tous les raids autorisés.' }, h('span', {}, `Raids ouverts (${save ? openRaids(save).length : 0})`), raidSel),
         h('h4', {}, 'État'),
         h('table', {},
           h('tr', {}, h('td', {}, 'Versus'), h('td', { className: 'n' }, n50 >= 3 ? `ouvert · ${st.vsWins ?? 0}/${st.vsFights ?? 0} victoires` : `verrouillé (${n50}/3 au N.50)`)),
@@ -4109,7 +4159,7 @@
   }
 
   const api = { itemEvolutions, evolutionTargets, healTierFor, shopTiers, bot, CONFIG, MODES, DEFAULTS, setMode, setOption, resetOptions, setTeamLock, bossMatchup, bossTeam, journal, Rt, mem, readBattle, teamMons, boxMons,
-    upgradeCandidates, comboGains, catchScreenDex, captureParam, ballItemOf, upgradePick, xpShare, usefulXp, pickTrainees, catchOnlyDex, wildShare, dexWorthEvolving, dexUsefulEvolutions, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, ensureRaidTeam, nextRaid, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
+    upgradeCandidates, comboGains, catchScreenDex, captureParam, ballItemOf, upgradePick, xpShare, usefulXp, pickTrainees, catchOnlyDex, wildShare, dexWorthEvolving, dexUsefulEvolutions, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, ensureRaidTeam, openRaids, nextRaid, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
     areaThreats, missingSpecies, desiredArea, buildData, Engine,
     obtainedDex, fossilTargets, catchTargetDex, targetArea, wantLuck, canBreed, dayCarePick, dayCareDue, eventOpen, rebattleState, rebattleMatchup, rebattleDue,
     raidBossHp, raidOdds, raidTrainee, parseSchedule, scheduledMode, Stats, noteCatchResult, notify, WakeLock };

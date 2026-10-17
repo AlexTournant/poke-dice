@@ -756,16 +756,18 @@ function fakeRaidTeamDialog(cands, initial = []) {
     const btnEl = el({
       get innerText() { const i = team.indexOf(c.id); return `${c.name}\nN.${c.level}${i >= 0 ? '\n' + (i + 1) : ''}`; },
       getAttribute: (k) => (k === 'aria-pressed' ? String(team.includes(c.id)) : null),
-      querySelector: (sel) => (sel === 'b' ? b : sel === 'small' ? small : sel.startsWith('span.light-scope') && team.includes(c.id) ? el({ innerText: String(team.indexOf(c.id) + 1) }) : null),
+      querySelector: (sel) => (sel === 'b' ? b : sel === 'small' ? small : null),
+      // Comme dans le jeu : le sprite contient un <span> vide (dernier enfant) AVANT le numéro de place
+      querySelectorAll: (sel) => (sel === 'span' ? [el({ className: 'relative', innerText: '' }), el({ className: '', innerText: '' }), ...(team.includes(c.id) ? [el({ className: 'light-scope grid h-7 w-7', innerText: String(team.indexOf(c.id) + 1) })] : [])] : []),
       click: () => { team = team.includes(c.id) ? team.filter((x) => x !== c.id) : team.length >= 3 ? team : [...team, c.id]; },
     });
     return btnEl;
   };
   const candBtns = cands.map(mkCand);
   const save = el({ innerText: 'ENREGISTRER', get disabled() { return team.length === 0; }, click() { save.saved = [...team]; } });
-  const clear = el({ innerText: 'EFFACER', get disabled() { return team.length === 0; }, click() { team = []; } });
+  const clear = el({ innerText: 'EFFACER', clears: 0, get disabled() { return team.length === 0; }, click() { clear.clears++; team = []; } });
   const dialogEl = el({ innerText: 'Ton équipe de raid', querySelectorAll: (sel) => (sel === 'li button[aria-pressed]' ? candBtns : sel.startsWith('button') ? [...candBtns, clear, save] : []) });
-  return { dialogEl, save, get team() { return team; } };
+  return { dialogEl, save, clear, get team() { return team; } };
 }
 
 test('Raid : l’équipe est refaite dans le bon ordre, même quand « Enregistrer » se désactive (équipe vide)', async () => {
@@ -788,6 +790,7 @@ test('Raid : l’équipe est refaite dans le bon ordre, même quand « Enregistr
     const expected = Object.keys(v).sort((x, y) => P.raidValue(v[y], 50, 7405, 50) - P.raidValue(v[x], 50, 7405, 50)).slice(0, 3);
     assert.deepEqual(ui.save.saved, expected, 'les 3 meilleurs contre le boss, le meilleur en tête');
     assert.ok(!ui.save.saved.includes('p'), 'pas de Plante contre un boss Feu');
+    assert.equal(ui.clear.clears, 1, 'l’équipe de départ est effacée une seule fois (plus de boucle choisir / effacer)');
     assert.equal(ui.save.saved.length, 3);
   } finally { document.querySelectorAll = before; P.Rt.i18n.clear(); P.Rt.frNameToDex.clear(); delete P.Rt.D.config.events; }
 });
@@ -814,4 +817,48 @@ test('Pokédex : captures — on ne fait évoluer que vers une espèce absente d
     const plan = P.xpTeamPlan(save, [...P.teamMons(save), ...P.boxMons(save)], [], P.Rt.D.areas.route1, 3);
     assert.equal(plan.carriers.length + plan.trainees.length, 3, 'les places restantes vont aux meilleurs Pokémon');
   } finally { cave.wildPool = pool; P.setMode('progression', { persist: false }); }
+});
+
+test('Raid : équipe déjà bonne et dans l’ordre → rien n’est effacé', async () => {
+  P.setMode('progression', { persist: false });
+  setup({ box: [['a', 999, 50]], team: ['a'], pokedex: [999] });
+  addMon(7401, 'Feu', 'fire', 300); addMon(7402, 'Eau', 'water', 300); addMon(7403, 'Plante', 'grass', 300); addMon(7404, 'Roche', 'rock', 300); addMon(7405, 'BossFeu', 'fire', 900);
+  P.Rt.i18n.set('ui.raid.teamSave', 'Enregistrer'); P.Rt.i18n.set('ui.versus.clear', 'Effacer');
+  for (const [n, d] of [['FEU', 7401], ['EAU', 7402], ['PLANTE', 7403], ['ROCHE', 7404]]) P.Rt.frNameToDex.set(n, d);
+  P.Rt.D.config.events = { raid: { teamCap: 50, level: 50, barHp: 2.2, bars: 3 } };
+  const v = { f: 7401, p: 7403, e: 7402, r: 7404 };
+  const best = Object.keys(v).sort((x, y) => P.raidValue(v[y], 50, 7405, 50) - P.raidValue(v[x], 50, 7405, 50)).slice(0, 3);
+  const cands = [{ id: 'f', name: 'Feu', level: 50 }, { id: 'p', name: 'Plante', level: 50 }, { id: 'e', name: 'Eau', level: 50 }, { id: 'r', name: 'Roche', level: 50 }];
+  const ui = fakeRaidTeamDialog(cands, best);
+  const before = document.querySelectorAll;
+  document.querySelectorAll = (sel) => (sel === '[role=dialog]' ? [ui.dialogEl] : []);
+  try {
+    const r = { dex: 7405, bossLevel: 50, idle: 0 };
+    for (let i = 0; i < 6 && !r.teamDone; i++) await P.ensureRaidTeam(r);
+    assert.equal(ui.clear.clears, 0, 'rien à effacer');
+    assert.deepEqual(ui.save.saved, best);
+  } finally { document.querySelectorAll = before; P.Rt.i18n.clear(); P.Rt.frNameToDex.clear(); delete P.Rt.D.config.events; }
+});
+
+test('Raids : raid choisi, raid du jour d’abord, en boucle sans plafond d’essais', () => {
+  P.setMode('progression', { persist: false });
+  const save = setup({ box: [['a', 999, 50]], team: ['a'], pokedex: [999] });
+  save.areaProgress.cave = { cleared: true };
+  P.Rt.D.config.events = { raid: { enabled: true } };
+  localStorage.removeItem('pokebot.activity');
+  try {
+    assert.deepEqual(P.openRaids(save).map((r) => r.key), ['daily', 'cave/26'], 'raid du jour + Raichu (grotte terminée)');
+    assert.equal(P.nextRaid(save).key, 'daily');
+    P.setOption('raidTarget', 'cave/26', { persist: false });
+    assert.equal(P.nextRaid(save).key, 'cave/26', 'raid choisi dans le panneau');
+    save.events = { raidsDone: ['cave:26'] };
+    assert.ok(!P.openRaids(save).some((r) => r.key === 'cave/26'), 'raid noté fait par le jeu (events.raidsDone)');
+    assert.equal(P.nextRaid(save).key, 'daily', 'raid choisi indisponible : retour au choix automatique');
+    delete save.events;
+    P.setOption('raidTarget', '', { persist: false });
+    localStorage.setItem('pokebot.activity', JSON.stringify({ raidTries: { day: new Date().toISOString().slice(0, 10), n: { daily: 99, 'cave/26': 99 } } }));
+    assert.equal(P.nextRaid(save), null, 'plafond d’essais atteint');
+    P.setOption('raidLoop', true, { persist: false });
+    assert.equal(P.nextRaid(save).key, 'daily', 'en boucle : on continue');
+  } finally { P.setOption('raidLoop', false, { persist: false }); P.setOption('raidTarget', '', { persist: false }); localStorage.removeItem('pokebot.activity'); delete P.Rt.D.config.events; }
 });

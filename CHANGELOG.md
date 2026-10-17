@@ -6,6 +6,19 @@ Chaque section `## [X.Y.Z]` correspond à un tag `vX.Y.Z`. Les notes de la relea
 
 ## [Non publié]
 
+## [1.7.3]
+
+### Corrigé
+
+- Raids : le bot choisissait deux Pokémon puis effaçait l'équipe, en boucle. Pour lire l'ordre des Pokémon choisis, il cherchait le numéro de place avec `span:last-child`, qui attrapait d'abord une case vide du sprite. L'ordre lu était toujours faux. Le numéro est maintenant lu dans `span.light-scope`, et l'équipe de départ n'est effacée qu'une seule fois.
+- Raids : un raid légendaire marqué fait par le jeu (`events.raidsDone`, clé « zone:dex ») n'est plus proposé.
+
+### Ajouté
+
+- Raids : choix du raid à lancer dans l'onglet Versus & Raids (`raidTarget`) : « Automatique » (raid du jour d'abord, puis les raids légendaires) ou un raid précis parmi ceux qui sont ouverts.
+- Raids : mode en boucle (`raidLoop`) : aucun plafond d'essais par jour ni arrêt sur estimation défavorable.
+- Raids : seulement les espèces pas encore au Pokédex (`raidOnlyMissing`, activé par défaut). Le raid du jour d'une espèce déjà capturée est passé ; les raids légendaires l'étaient déjà.
+
 ## [1.7.2]
 
 ### Corrigé
