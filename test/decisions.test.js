@@ -92,7 +92,7 @@ test('Balls : achète la Ball qui suffit pour chaque espèce manquante, pas plus
   const save = setup({ box: [['a', 16, 10]], team: ['a'], pokedex: [16], badges: 4, gold: 3000, inventory: {}, area: 'forest' });
   const plan = P.ballPlan(save);
   const by = Object.fromEntries(plan.species.map((x) => [x.dex, x]));
-  assert.equal(by[10].key, 'poke-ball', 'Chenipan : la Poké Ball donne 100 %');
+  assert.equal(by[10].key, null, 'Chenipan (difficulté 2) : 83 % sans Ball, au-dessus du seuil de 80 %');
   assert.equal(by[25].key, 'ultra-ball', 'Pikachu : aucune Ball n’atteint 90 % → la meilleure (67 %)');
   const wish = P.shopWishlist(save);
   const rare = wish.find((w) => w.key === 'ultra-ball');
@@ -110,13 +110,35 @@ test('capture : Ball choisie à l’écran selon l’enjeu', () => {
     { t: 'sans', pct: 33, price: 0, bonus: 0 }, { t: 'poke', pct: 50, price: 20, bonus: 1 },
     { t: 'super', pct: 67, price: 50, bonus: 2 }, { t: 'hyper', pct: 100, price: 100, bonus: 3 }, { t: 'master', pct: 100, price: 1000, bonus: 10, master: true },
   ];
-  assert.equal(P.chooseBall(opts, { rare: true, why: 'nouvelle espèce' }).t, 'hyper', 'nouvelle espèce : la moins chère ≥ 90 %');
+  assert.equal(P.chooseBall(opts, { rare: true, why: 'nouvelle espèce' }).t, 'hyper', 'nouvelle espèce : la moins chère ≥ 80 %');
   assert.equal(P.chooseBall(opts, { rare: true, why: 'chromatique' }).t, 'hyper', 'chromatique : meilleure chance, sans Master Ball');
   assert.equal(P.chooseBall(opts, { legendary: true }).t, 'hyper', 'à chance égale, la moins chère (pas la Master)');
-  assert.equal(P.chooseBall(opts, {}).t, 'poke', 'espèce connue : la moins chère');
+  assert.equal(P.chooseBall(opts, {}).t, 'hyper', 'espèce connue : Super 67 % < 80 %, l’Hyper Ball (100 %) est la moins chère au-dessus');
+  P.setOption('catchKnown', 'cheap', { persist: false });
+  assert.equal(P.chooseBall(opts, {}).t, 'poke', 'option « la moins chère »');
   P.setOption('catchKnown', 'free', { persist: false });
   assert.equal(P.chooseBall(opts, {}).t, 'sans', 'option Sans Ball');
-  P.setOption('catchKnown', 'cheap', { persist: false });
+  P.setOption('catchKnown', 'normal', { persist: false });
+});
+
+test('capture : règle du seuil de 80 % (meilleure Ball si aucune ne l’atteint)', () => {
+  P.setMode('progression', { persist: false });
+  P.setOption('catchKnown', 'normal', { persist: false });
+  const low = [
+    { t: 'sans', pct: 0, price: 0, bonus: 0 }, { t: 'poke', pct: 17, price: 20, bonus: 1 },
+    { t: 'super', pct: 33, price: 50, bonus: 2 }, { t: 'hyper', pct: 50, price: 100, bonus: 3 },
+  ];
+  assert.equal(P.chooseBall(low, {}).t, 'hyper', 'espèce connue, tout sous 80 % : la meilleure chance');
+  assert.equal(P.chooseBall(low, { rare: true, why: 'nouvelle espèce' }).t, 'hyper', 'nouvelle espèce : idem');
+  const high = [
+    { t: 'sans', pct: 50, price: 0, bonus: 0 }, { t: 'poke', pct: 67, price: 20, bonus: 1 },
+    { t: 'super', pct: 83, price: 50, bonus: 2 }, { t: 'hyper', pct: 100, price: 100, bonus: 3 },
+  ];
+  assert.equal(P.chooseBall(high, {}).t, 'super', 'meilleure ≥ 80 % : on descend à la moins chère qui reste ≥ 80 %');
+  assert.equal(P.chooseBall(high, { rare: true, why: 'chromatique' }).t, 'hyper', 'chromatique : toujours la meilleure chance');
+  P.setOption('catchNewPct', 100, { persist: false });
+  assert.equal(P.chooseBall(high, { rare: true, why: 'nouvelle espèce' }).t, 'hyper', 'seuil 100 : toujours la meilleure');
+  P.setOption('catchNewPct', 80, { persist: false });
 });
 
 test('boutique : les soins urgents passent avant les Balls (le soin n’est plus affamé)', () => {
@@ -593,4 +615,34 @@ test('Anti-veille : verrou pris au démarrage, rendu à l’arrêt', async () =>
     await P.WakeLock.on();
     assert.equal(calls.length, 2, 'option coupée : aucun verrou');
   } finally { if (before) Object.defineProperty(globalThis, 'navigator', before); else delete globalThis.navigator; P.setOption('keepAwake', true, { persist: false }); }
+});
+
+test('Combos : gain réel du combo payé, y compris quand un combo plus fort le cachait', () => {
+  P.setMode('progression', { persist: false });
+  const save = setup({ box: [['a', 7301, 30]], team: ['a'], pokedex: [7301] });
+  P.Rt.D.species[7301] = { dex: 7301, name: 'Quatre', type1: 'normal', type2: null, baseHp: 12, maxHp: 300, speed: 5, rerolls: 0, milestones: [], dice: [{ type: 'base', count: 4 }] };
+  // Paire 2 → 8 (dépasse la Double paire à 5) ; Double paire déjà au maximum
+  P.Rt.D.comboUp = { pair: [{ level: 1, bonus: 2, cost: 0 }, { level: 2, bonus: 8, cost: 100 }], two_pair: [{ level: 1, bonus: 5, cost: 0 }], three_kind: [{ level: 1, bonus: 6, cost: 0 }, { level: 2, bonus: 9, cost: 100 }] };
+  P.Rt.D.config.comboPayoutMode = 'highestDamage';
+  const mons = [{ m: P.teamMons(save)[0], w: 1 }];
+  const g = P.comboGains(save, mons, 2000);
+  assert.equal(g.two_pair, 0, 'pas de niveau suivant : aucun gain');
+  // Paire améliorée (8) : +6 sur une Paire seule, +3 quand la Double paire (5) la cachait, +2 au-dessus d'un Brelan (6) ou d'un Carré
+  // 4 dés base : P(paire seule) = 720/1296, P(double paire) = 90/1296, P(brelan) = 120/1296, P(carré) = 6/1296
+  const exact = (720 * 6 + 90 * 3 + 120 * 2 + 6 * 2) / 1296; // ≈ 3,73 ; l'ancien calcul ne voyait que 720×6/1296 ≈ 3,33
+  assert.ok(Math.abs(g.pair - exact) < 0.25, `gain de la Paire ≈ ${exact.toFixed(2)} par lancer (mesuré ${g.pair.toFixed(2)})`);
+  assert.ok(g.three_kind > 0);
+  const cands = P.upgradeCandidates(save).filter((c) => c.kind === 'combo').map((c) => c.key);
+  assert.ok(cands.includes('pair') && !cands.includes('two_pair'));
+});
+
+test('Combos : calcul rapide même avec une grosse équipe et des relances', () => {
+  const save = setup({ box: [['a', 7302, 50]], team: ['a'], pokedex: [7302] });
+  P.Rt.D.species[7302] = { dex: 7302, name: 'Six', type1: 'normal', type2: null, baseHp: 12, maxHp: 300, speed: 5, rerolls: 3, milestones: [], dice: [{ type: 'normal', count: 6 }] };
+  P.Rt.D.comboUp = Object.fromEntries(['pair', 'two_pair', 'three_kind', 'small_straight', 'full_house', 'four_kind', 'full_straight', 'five_kind'].map((k, i) => [k, [{ level: 1, bonus: 2 + 3 * i, cost: 0 }, { level: 2, bonus: 4 + 4 * i, cost: 200 }]]));
+  const mon = P.teamMons(save)[0];
+  const t0 = performance.now();
+  const g = P.comboGains(save, Array.from({ length: 9 }, () => ({ m: mon, w: 1 })));
+  assert.ok(performance.now() - t0 < 300, `9 Pokémon à 6 dés : ${(performance.now() - t0).toFixed(0)} ms`);
+  assert.ok(Object.values(g).filter((x) => x > 0).length >= 5, 'la plupart des combos ont un gain mesuré');
 });

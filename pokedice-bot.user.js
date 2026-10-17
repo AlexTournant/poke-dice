@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pokédice Autopilot
 // @namespace    pokedice-bot
-// @version      1.6.0
+// @version      1.6.1
 // @description  Joue à Pokédice — modes Progression / Pokédex / Farm / Versus / Raids : combats optimisés, soins, captures, boutique, améliorations, Centre, zones.
 // @match        https://poke-dice.netlify.app/*
 // @grant        none
@@ -138,9 +138,10 @@
     bossTraineeGain: 1.2,         // un "contre" de la Boîte entre en formation s'il ferait 20 % mieux au niveau du boss
 
     // Capture : chance exacte = (7 − (difficulté − bonus Ball)) / 6, difficulté 1–9 par espèce
-    catchNewPct: 100,             // nouvelle espèce : Ball la moins chère qui atteint ce % (sinon la meilleure) — 100 = toujours la meilleure chance
-    catchKnown: 'cheap',          // espèce déjà au Pokédex : 'free' (Sans Ball), 'cheap' (Ball la moins chère), 'normal' (catchMinPct)
-    catchMinPct: 80,              // 'normal' : Ball la moins chère qui atteint ce %
+    // Règle des seuils : si même la meilleure Ball reste sous le seuil, on lance la meilleure ; sinon la moins chère au-dessus du seuil
+    catchNewPct: 80,              // nouvelle espèce : seuil (100 = toujours la meilleure chance)
+    catchKnown: 'normal',         // espèce déjà au Pokédex : 'normal' (règle du seuil catchMinPct), 'cheap' (Ball la moins chère), 'free' (Sans Ball)
+    catchMinPct: 80,              // 'normal' : seuil pour les espèces déjà capturées
     catchRarePct: 95,             // chromatique ou légendaire : la meilleure chance possible
     catchTarget: '',              // espèce visée (nom affiché par le jeu) : le bot va dans la meilleure zone pour elle et la capture
     farmGoal: 'xp',
@@ -1603,9 +1604,10 @@
   /* ── 6.6 Capture ── */
   /**
    * Choix de la Ball parmi les options affichées ({pct, price, bonus, master}) :
-   *  - chromatique / légendaire : la meilleure chance, au prix le plus bas pour cette chance ;
-   *  - nouvelle espèce : la moins chère qui atteint catchNewPct (100 % par défaut, sinon la meilleure) ;
-   *  - espèce connue : selon catchKnown (Sans Ball / la moins chère / catchMinPct), jamais la meilleure Ball.
+   *  - chromatique / légendaire / raid : la meilleure chance, au prix le plus bas pour cette chance ;
+   *  - sinon, règle du seuil (80 % par défaut, catchNewPct pour une nouvelle espèce, catchMinPct sinon) :
+   *    si même la meilleure Ball reste sous le seuil, on lance la meilleure ; sinon la moins chère au-dessus.
+   *    Avant la v1.6.1, une espèce connue recevait toujours la Ball la moins chère, même à 33 %.
    */
   function chooseBall(opts, { legendary = false, rare = false, why = '' } = {}) {
     const byPrice = (a, b) => a.price - b.price || b.pct - a.pct;
@@ -1613,14 +1615,19 @@
     if (!usable.length) return opts[0];
     const bestPct = Math.max(...usable.map((o) => o.pct));
     const cheapestAt = (pct) => [...usable].sort(byPrice).find((o) => o.pct >= pct);
-    if (legendary || (rare && why !== 'nouvelle espèce')) return cheapestAt(bestPct);
-    if (rare) return cheapestAt(Math.min(bestPct, CONFIG.catchNewPct));
-    const topBonus = Math.max(...usable.map((o) => o.bonus));
-    const common = usable.filter((o) => o.bonus < topBonus || usable.every((x) => x.bonus === topBonus));
-    const free = common.find((o) => o.price === 0);
+    /** Règle du seuil : meilleure Ball sous le seuil → la meilleure chance ; sinon la moins chère qui le dépasse. */
+    const threshold = (pct) => cheapestAt(bestPct < pct ? bestPct : pct);
+    if (legendary || (rare && why !== 'nouvelle espèce')) return cheapestAt(bestPct); // chromatique, légendaire, raid
+    if (rare) return threshold(CONFIG.catchNewPct);
+    const free = usable.find((o) => o.price === 0);
     if (CONFIG.catchKnown === 'free' && free) return free;
-    if (CONFIG.catchKnown === 'cheap') return [...common].filter((o) => o.price > 0).sort(byPrice)[0] ?? free ?? common[0];
-    return [...common].sort(byPrice).find((o) => o.pct >= CONFIG.catchMinPct) ?? [...common].sort((a, b) => b.pct - a.pct)[0] ?? usable[0];
+    if (CONFIG.catchKnown === 'cheap') {
+      // ancienne option : la moins chère, sans entamer la réserve de meilleures Balls
+      const topBonus = Math.max(...usable.map((o) => o.bonus));
+      const common = usable.filter((o) => o.bonus < topBonus || usable.every((x) => x.bonus === topBonus));
+      return [...common].filter((o) => o.price > 0).sort(byPrice)[0] ?? free ?? common[0];
+    }
+    return threshold(CONFIG.catchMinPct);
   }
 
   async function playCatch() {
@@ -2851,6 +2858,53 @@
    * Poids d'un type de dé : 1 par dé dans l'équipe, upgradeBoxWeight par dé des meilleurs Pokémon de la Boîte,
    * ×upgradeBossBoost s'il est super efficace contre le boss en attente.
    */
+  /**
+   * Gain de dégâts par lancer (somme pondérée sur les Pokémon) si l'on améliore chaque combo d'un niveau.
+   * Le jeu ne paie qu'UN combo par lancer (le plus fort, ou le plus haut rang selon comboPayoutMode) : on mesure donc
+   * de combien le combo payé augmente, pas la fréquence du combo. Une Paire présente partout mais battue par la
+   * Double paire rapporte quand même dès qu'elle passe devant. Avant la v1.6.1, seuls les lancers où le combo
+   * était DÉJÀ le meilleur comptaient : les combos faciles mais « cachés » n'étaient presque jamais achetés.
+   * Les relances sont simulées comme le bot joue pour un combo : on garde la valeur la plus fréquente et on relance
+   * le reste, si ça améliore le lancer. Monte Carlo à graine fixe → décision stable.
+   * @param {{m:object, w:number}[]} mons  Pokémon (avec stats) et poids (équipe 1, Boîte upgradeBoxWeight)
+   * @returns {Object<string, number>}
+   */
+  function comboGains(save, mons, samples = 300) {
+    const gain = Object.fromEntries(COMBOS.map((c) => [c, 0]));
+    const highestRank = Rt.D.config.comboPayoutMode === 'highestRank';
+    const cur = Object.fromEntries(COMBOS.map((k) => [k, Rt.E.comboBonus(k, save)]));
+    const next = {};
+    for (const k of COMBOS) { const row = Rt.D.comboUp[k]?.find((r) => r.level === (save.comboLevels?.[k] ?? 1) + 1); next[k] = row ? row.bonus : cur[k]; }
+    const paid = (present, bonus) => (highestRank ? (present.length ? { k: present.at(-1), b: bonus[present.at(-1)] } : null) : present.reduce((best, k) => (bonus[k] > (best?.b ?? -1) ? { k, b: bonus[k] } : best), null));
+    const score = (vals) => vals.reduce((a, b) => a + b, 0) + (paid(Rt.E.combosIn(vals), cur)?.b ?? 0);
+    let seed = 12345;
+    const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+    const rollDie = (t) => { const fs = Rt.E.facesOf(t); return Rt.E.faceVal(fs[(rnd() * fs.length) | 0]); };
+    for (const { m, w } of mons) {
+      if (!m.stats?.dice?.length) continue;
+      const dice = m.stats.dice;
+      const rerolls = Math.min(2, m.stats.rerolls ?? 0);
+      for (let s = 0; s < samples; s++) {
+        let vals = dice.map(rollDie);
+        for (let r = 0; r < rerolls; r++) {
+          const count = new Map();
+          for (const v of vals) count.set(v, (count.get(v) ?? 0) + 1);
+          const [keep] = [...count.entries()].sort((a, b) => b[1] - a[1] || b[0] - a[0])[0];
+          const tryVals = vals.map((v, i) => (v === keep ? v : rollDie(dice[i])));
+          if (score(tryVals) > score(vals)) vals = tryVals;
+        }
+        const present = Rt.E.combosIn(vals);
+        const base = paid(present, cur)?.b ?? 0;
+        for (const k of present) {
+          if (next[k] === cur[k]) continue;
+          const after = paid(present, { ...cur, [k]: next[k] })?.b ?? 0;
+          gain[k] += ((after - base) * w) / samples;
+        }
+      }
+    }
+    return gain;
+  }
+
   function upgradeCandidates(save) {
     const team = teamMons(save).filter((m) => m.stats);
     if (!team.length) return [];
@@ -2872,23 +2926,12 @@
       out.push({ kind: 'die', key: type, cost: nextRow.cost, value: (delta * w * boost) / nextRow.cost, label: Rt.t('ui.upgrades.dieName', 'Dé {type}').replace('{type}', Rt.t('ui.type.' + type, type)) });
     }
     if (CONFIG.buy.comboUpgrades) {
-      // Fréquence de chaque combo pour les dés de l'équipe (Monte Carlo léger, graine fixe → décision stable)
-      const freq = Object.fromEntries(COMBOS.map((c) => [c, 0]));
-      let samples = 0, seed = 12345;
-      const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
-      for (const m of team) for (let s = 0; s < 400; s++) {
-        const vals = m.stats.dice.map((t) => { const fs = Rt.E.facesOf(t); return Rt.E.faceVal(fs[(rnd() * fs.length) | 0]); });
-        let best = null, bb = -1;
-        for (const k of Rt.E.combosIn(vals)) { const b = Rt.E.comboBonus(k, save); if (b > bb) { bb = b; best = k; } }
-        if (best) freq[best]++;
-        samples++;
-      }
+      const gain = comboGains(save, [...team.map((m) => ({ m, w: 1 })), ...bench.map((m) => ({ m, w: CONFIG.upgradeBoxWeight }))]);
       for (const k of COMBOS) {
         const lvl = save.comboLevels?.[k] ?? 1;
         const nextRow = Rt.D.comboUp[k]?.find((r) => r.level === lvl + 1);
-        if (!nextRow || !freq[k]) continue;
-        const delta = nextRow.bonus - Rt.E.comboBonus(k, save);
-        out.push({ kind: 'combo', key: k, cost: nextRow.cost, value: (delta * freq[k] / samples * team.length) / nextRow.cost, label: Rt.t('ui.combo.' + k, k) });
+        if (!nextRow || !(gain[k] > 0)) continue;
+        out.push({ kind: 'combo', key: k, cost: nextRow.cost, value: gain[k] / nextRow.cost, gain: gain[k], label: Rt.t('ui.combo.' + k, k) });
       }
     }
     return out.sort((a, b) => b.value - a.value);
@@ -3482,9 +3525,9 @@
     { tab: 'Captures', icon: '🎯', groups: [
       { title: 'Choix de la Ball (chance exacte : dé 1–6 + bonus ≥ difficulté)', fields: [
         { p: 'catchTarget', t: 'text', l: 'Espèce visée (nom affiché en jeu, vide = aucune)', h: 'Le bot va dans la zone ouverte où elle apparaît le plus et la capture avec la meilleure Ball. L’objectif s’efface une fois l’espèce au Pokédex.' },
-        { p: 'catchNewPct', t: 'num', l: 'Nouvelle espèce : viser au moins (%)', min: 30, max: 100, step: 5 },
-        { p: 'catchKnown', t: 'sel', l: 'Espèce déjà capturée', o: [['free', 'Sans Ball (gratuit)'], ['cheap', 'Ball la moins chère'], ['normal', 'la moins chère qui atteint le % ci-dessous']] },
-        { p: 'catchMinPct', t: 'num', l: '↳ % visé', min: 0, max: 100, step: 5 },
+        { p: 'catchNewPct', t: 'num', l: 'Nouvelle espèce : seuil (%)', min: 30, max: 100, step: 5, h: 'Sous ce seuil, même la meilleure Ball : on la lance. Au-dessus : la moins chère qui le dépasse. 100 = toujours la meilleure.' },
+        { p: 'catchKnown', t: 'sel', l: 'Espèce déjà capturée', o: [['normal', 'règle du seuil ci-dessous'], ['cheap', 'Ball la moins chère'], ['free', 'Sans Ball (gratuit)']] },
+        { p: 'catchMinPct', t: 'num', l: '↳ seuil (%)', min: 0, max: 100, step: 5 },
         { p: 'pokedexFleeKnownMargin', t: 'num', l: 'Pokédex : fuit les espèces connues si l’équipe dépasse la zone de +N niv.', min: 0, max: 30 },
         { p: 'pokedexStallEncounters', t: 'num', l: 'Pokédex : quitte une zone après N rencontres sans nouvelle espèce', min: 10, max: 500, step: 10 },
         { p: 'pokedexStallMinutes', t: 'num', l: '↳ et n’y revient pas avant N minutes', min: 0, max: 600, step: 5 },
@@ -3831,7 +3874,7 @@
   }
 
   const api = { itemEvolutions, evolutionTargets, healTierFor, shopTiers, bot, CONFIG, MODES, DEFAULTS, setMode, setOption, resetOptions, setTeamLock, bossMatchup, bossTeam, journal, Rt, mem, readBattle, teamMons, boxMons,
-    upgradeCandidates, upgradePick, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, nextRaid, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
+    upgradeCandidates, comboGains, upgradePick, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, nextRaid, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
     areaThreats, missingSpecies, desiredArea, buildData, Engine,
     obtainedDex, fossilTargets, catchTargetDex, targetArea, wantLuck, canBreed, dayCarePick, dayCareDue, eventOpen, rebattleState, rebattleMatchup, rebattleDue,
     raidBossHp, raidOdds, raidTrainee, parseSchedule, scheduledMode, Stats, noteCatchResult, notify, WakeLock };
