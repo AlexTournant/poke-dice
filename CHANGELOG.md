@@ -6,6 +6,15 @@ Chaque section `## [X.Y.Z]` correspond à un tag `vX.Y.Z`. Les notes de la relea
 
 ## [Non publié]
 
+## [1.7.7]
+
+### Corrigé
+
+- Le bot pouvait échanger sans fin deux Pokémon (signalé à la Caverne Azurée avec Leveinard et Grolem). Garde-fous ajoutés :
+  - avant un combat, au plus 2 changements de meneur par rencontre, et jamais pour remettre un Pokémon qu'on vient de remplacer ;
+  - au Centre, un Pokémon mis en Boîte depuis moins de 10 minutes ne revient pas, et au plus 3 échanges par passage.
+  Chaque garde-fou écrit une ligne « ⛔ … boucle évitée » dans le journal.
+
 ## [1.7.6]
 
 ### Corrigé

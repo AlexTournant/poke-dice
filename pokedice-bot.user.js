@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pokédice Autopilot
 // @namespace    pokedice-bot
-// @version      1.7.6
+// @version      1.7.7
 // @description  Joue à Pokédice — modes Progression / Pokédex / Farm / Versus / Raids : combats optimisés, soins, captures, boutique, améliorations, Centre, zones.
 // @match        https://poke-dice.netlify.app/*
 // @grant        none
@@ -1193,10 +1193,19 @@
     const best = weakest || (xpBest && usefulXp(xpBest.m, team, save) > usefulXp(scored[0].m, team, save) ? xpBest : null) || trainee || scored[0];
     if (best !== scored[0] && CONFIG.debug) mem.trainingNote = `🎓 ${best.m.name} N.${best.m.level} mène pour l'XP (duel ${best.s.toFixed(2)})`;
     const training = best !== scored[0]; // meneur choisi pour l'XP : le gain de score n'est pas le critère
-    if (CONFIG.manageLead && best && cur && best.m.id !== cur.m.id && (training || best.s > cur.s * CONFIG.leadSwitchGain)) {
+    // Garde-fou : au plus 2 changements de meneur par rencontre (sinon le bot pouvait alterner sans fin entre deux Pokémon)
+    const encSig = `${kind}|${foe?.dex ?? '?'}|${foe?.level ?? '?'}`;
+    if (mem.leadSwaps?.sig !== encSig) mem.leadSwaps = { sig: encSig, n: 0, from: [] };
+    const swapsLeft = mem.leadSwaps.n < 2 && !(best && mem.leadSwaps.from.includes(best.m.id));
+    if (!swapsLeft && best && cur && best.m.id !== cur.m.id && mem.leadSwaps.logged !== encSig) {
+      mem.leadSwaps.logged = encSig;
+      log(`⛔ meneur : ${cur.m.name} gardé (changements déjà faits pour cette rencontre : ${mem.leadSwaps.n}, ${best.m.name} venait d'être remplacé) — boucle évitée`);
+    }
+    if (swapsLeft && CONFIG.manageLead && best && cur && best.m.id !== cur.m.id && (training || best.s > cur.s * CONFIG.leadSwitchGain)) {
       const target = sendBtns.find((x) => norm(x.getAttribute('aria-label')).endsWith(norm(best.m.name)));
       if (target) {
         log(training ? mem.trainingNote ?? `🎓 ${best.m.name} mène pour l'XP` : `🔀 meneur : ${best.m.name} (${best.s.toFixed(2)}) au lieu de ${cur.m.name} (${cur.s.toFixed(2)})`);
+        mem.leadSwaps.n++; mem.leadSwaps.from.push(cur.m.id);
         target.click(); await sleep(350);
         return true;
       }
@@ -1755,10 +1764,22 @@
     }
 
     // 1) Faire entrer un Pokémon de la Boîte s'il est meilleur
+    // Garde-fou : un Pokémon sorti il y a moins de 10 min ne revient pas, et au plus `size` échanges par passage
+    // (sinon deux Pokémon pouvaient s'échanger sans fin, le calcul changeant à chaque échange)
+    if (mem.centerSwaps?.visit !== visit) mem.centerSwaps = { visit, n: 0, out: mem.centerSwaps?.out?.filter((o) => Date.now() - o.at < 600000) ?? [] };
+    const recentlyOut = new Set(mem.centerSwaps.out.map((o) => o.id));
+    const blocked = want.find((m) => !teamIds.has(m.id) && recentlyOut.has(m.id));
+    if (blocked || mem.centerSwaps.n >= size) {
+      mem.centerDone = visit;
+      log(`⛔ Centre : équipe gardée${blocked ? ` (${blocked.name} vient d'être mis en Boîte, il ne revient pas tout de suite)` : ` (${mem.centerSwaps.n} échanges déjà faits)`} — boucle évitée`);
+      return false;
+    }
     const incoming = want.find((m) => !teamIds.has(m.id));
     if (incoming) {
       // Sort le plus faible de l'équipe qui n'est PAS dans l'équipe voulue (jamais le Pokémon en formation)
       const outgoing = [...team].filter((m) => !want.some((w) => w.id === m.id)).sort((a, b) => (all.find((x) => x.m.id === a.id)?.s ?? 0) - (all.find((x) => x.m.id === b.id)?.s ?? 0))[0];
+      mem.centerSwaps.n++;
+      if (outgoing) mem.centerSwaps.out.push({ id: outgoing.id, at: Date.now() });
       const card = $$('main button').find((x) => visible(x) && norm(x.innerText).startsWith(norm(incoming.name)) && x.innerText.includes(String(incoming.level)) && !teamCardIds().has(x));
       if (card) {
         card.click(); await sleep(500);
