@@ -1,11 +1,15 @@
 // ==UserScript==
 // @name         Pokédice Autopilot
 // @namespace    pokedice-bot
-// @version      1.4.0
+// @version      1.4.1
 // @description  Joue à Pokédice — modes Progression / Pokédex / Farm / Versus / Raids : combats optimisés, soins, captures, boutique, améliorations, Centre, zones.
 // @match        https://poke-dice.netlify.app/*
 // @grant        none
 // @run-at       document-idle
+// @homepageURL  https://github.com/AlexTournant/poke-dice
+// @supportURL   https://github.com/AlexTournant/poke-dice/issues
+// @updateURL    https://raw.githubusercontent.com/AlexTournant/poke-dice/main/pokedice-bot.user.js
+// @downloadURL  https://raw.githubusercontent.com/AlexTournant/poke-dice/main/pokedice-bot.user.js
 // ==/UserScript==
 
 /*
