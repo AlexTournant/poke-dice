@@ -6,6 +6,18 @@ Chaque section `## [X.Y.Z]` correspond à un tag `vX.Y.Z`. Les notes de la relea
 
 ## [Non publié]
 
+## [1.12.0]
+
+### Ajouté
+
+- Bandeau jaune sous la barre : quand le bot fait autre chose que le mode choisi, il dit pourquoi et ce qu'il fait en attendant. Exemples :
+  - « Mode « Revanche du Conseil 4 » en attente — pourquoi : … pas encore gagnable, la meilleure équipe bat 9/15 adversaires → entraînement en Progression » ;
+  - Versus verrouillé, ou prochaine tentative à telle heure ;
+  - raids déjà faits ou au plafond d'essais ;
+  - changement de région en cours, ou impossible.
+
+  Le bandeau reste affiché tant que la raison tient (le journal, lui, défile), et s'efface quand l'activité reprend ou que le mode change. ✕ le masque jusqu'à la raison suivante. Réglage : « Expliquer quand le bot fait autre chose que le mode choisi » (`showWhy`).
+
 ## [1.11.4]
 
 ### Corrigé

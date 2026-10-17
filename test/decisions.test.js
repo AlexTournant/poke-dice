@@ -1367,3 +1367,21 @@ test('Mode Revanche : on tente quand la simulation bat la plupart des adversaire
     assert.ok(!P.rebattlePlan(save).worthTrying, '75 % < 80 % : on s’entraîne');
   } finally { P.setOption('rebattleTryPct', 0.8, { persist: false }); delete P.Rt.D.config.events; delete P.Rt.D.config.rebattleLineups; delete P.Rt.D.regions.kanto.leagueAreaId; P.setMode('progression', { persist: false }); }
 });
+
+test('Bandeau « pourquoi » : raison affichée quand l’activité ne se joue pas, effacée quand elle reprend', async () => {
+  const save = setup({ box: [['a', 999, 20]], team: ['a'], pokedex: [999] });
+  P.setMode('versus', { persist: false });
+  try {
+    P.mem.why = null;
+    await P.activityTick();
+    assert.equal(P.mem.why?.key, 'vs');
+    assert.match(P.mem.why.msg, /Versus verrouillé/);
+    P.setMode('progression', { persist: false });
+    assert.equal(P.mem.why, null, 'changer de mode efface la raison');
+    P.explain('region', 'cap sur Johto');
+    P.explainClear('vs');
+    assert.equal(P.mem.why?.key, 'region', 'on n’efface que la raison concernée');
+    P.explainClear('region');
+    assert.equal(P.mem.why, null);
+  } finally { P.mem.why = null; P.setMode('progression', { persist: false }); }
+});
