@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pokédice Autopilot
 // @namespace    pokedice-bot
-// @version      1.5.1
+// @version      1.6.0
 // @description  Joue à Pokédice — modes Progression / Pokédex / Farm / Versus / Raids : combats optimisés, soins, captures, boutique, améliorations, Centre, zones.
 // @match        https://poke-dice.netlify.app/*
 // @grant        none
@@ -157,7 +157,7 @@
     raidMaxTries: 8,              // essais par raid et par jour avant d'aller s'entraîner
     raidAutoTeam: true,           // compose l'équipe de raid contre le boss à chaque raid
     raidFriends: true,            // ajoute au groupe les amis dont l'équipe de raid est la plus recommandée contre le boss
-    raidMinOdds: 0.6,             // dégâts estimés (toi + alliés) / PV totaux du boss : en dessous, on arrête après 2 essais…
+    raidMinOdds: 0.6,             // dégâts estimés (toi + alliés) / PV totaux du boss : en dessous, on arrête après 2 défaites…
     raidTrain: true,              // …et on entraîne au Centre le meilleur « contre » du boss qui n'a pas le niveau plafond
     // Événements et routines (tous modes)
     eventWheel: true,             // Roue de la fortune : un tour gratuit par jour
@@ -169,6 +169,7 @@
     // Confort
     notify: true,                 // notification du navigateur : chromatique, légendaire, boss, Œuf chromatique, bot arrêté
     notifySound: true,            // ↳ petit son en plus
+    keepAwake: true,              // empêche l'écran (et donc le PC) de se mettre en veille tant que le bot tourne
     schedule: '',                 // planning : "08:00-23:00=pokedex; 23:00-08:00=farm" (vide = désactivé)               // mode Farm : 'xp' (zone choisie) ou 'gold' (zone qui rapporte le plus de ₽ par rencontre)
 
     // Performance (fin de jeu : Pokémon à 5-6 dés, grosse Boîte)
@@ -183,11 +184,11 @@
 
   /** Réglages propres à chaque mode (appliqués par-dessus CONFIG). */
   const MODES = {
-    progression: { label: 'Progression', stock: { heal: 4, ball: 8, rareBall: 2, cure: 1, ether: 1 }, lockTeam: false, trainWeakest: false },
-    pokedex: { label: 'Pokédex : captures', dexFocus: 'catch', stock: { heal: 4, ball: 10, rareBall: 4, cure: 1, ether: 1 }, lockTeam: false, trainWeakest: false },
-    pokedexEvo: { label: 'Pokédex : évolutions', baseMode: 'pokedex', dexFocus: 'evo', stock: { heal: 4, ball: 6, rareBall: 2, cure: 1, ether: 1 }, lockTeam: false, trainWeakest: false },
+    progression: { label: 'Progression', stock: { heal: 4, ball: 8, rareBall: 2, cure: 1, ether: 1, bait: 2 }, lockTeam: false, trainWeakest: false },
+    pokedex: { label: 'Pokédex : captures', dexFocus: 'catch', stock: { heal: 4, ball: 10, rareBall: 4, cure: 1, ether: 1, bait: 4 }, lockTeam: false, trainWeakest: false },
+    pokedexEvo: { label: 'Pokédex : évolutions', baseMode: 'pokedex', dexFocus: 'evo', stock: { heal: 4, ball: 6, rareBall: 2, cure: 1, ether: 1, bait: 1 }, lockTeam: false, trainWeakest: false },
     // Farm : ton équipe est respectée (verrouillée) et le moins haut niveau mène quand c'est sans risque
-    farm: { label: 'Farm', stock: { heal: 5, ball: 8, rareBall: 3, cure: 1, ether: 1 }, lockTeam: true, trainWeakest: true },
+    farm: { label: 'Farm', stock: { heal: 5, ball: 8, rareBall: 3, cure: 1, ether: 1, bait: 2 }, lockTeam: true, trainWeakest: true },
     versus: { label: 'Versus', activity: true },
     raid: { label: 'Raids', activity: true },
   };
@@ -227,7 +228,7 @@
     const D = {
       source: bundle ? 'indexeddb' : 'fallback',
       dice: {}, chart: {}, comboUp: {}, dieUp: {}, status: FALLBACK.status, config: {},
-      species: {}, items: {}, areas: {}, areaList: [], trainers: {}, regions: {},
+      species: {}, items: {}, areas: {}, areaList: [], trainers: {}, regions: {}, eggGroups: bundle?.eggGroups ?? {},
     };
     for (const d of bundle?.diceTypes ?? FALLBACK.diceTypes) D.dice[d.type] = d;
     for (const r of bundle?.typeChart ?? []) D.chart[`${r.attacking}>${r.defending}`] = r.multiplier;
@@ -571,6 +572,12 @@
           if (m[1].startsWith('item.') && !m[1].includes('.desc')) this.itemNameToKey.set(norm(v), m[1].slice(5));
           if (m[1].startsWith('area.')) this.areaName.set(norm(cells[0]), v); // clé = nom anglais du bundle
         }
+        // Groupes Œuf (Pension) : embarqués dans le bundle, pas dans IndexedDB — {1:{g:["Monster","Grass"]},…,{g:[…],s:"N",l:1}}
+        const eg = {};
+        for (const g of src.matchAll(/(\d+):\{g:\[([^\]]*)\](?:,s:"(\w)")?(?:,l:(\d))?\}/g)) {
+          eg[+g[1]] = { g: g[2].split(',').map((x) => x.replace(/"/g, '')).filter(Boolean), ...(g[3] && { s: g[3] }), ...(g[4] && { l: +g[4] }) };
+        }
+        if (Object.keys(eg).length > 100) this.D.eggGroups = eg;
       } catch (e) { console.warn('[PokéBot] i18n indisponible', e); }
     },
 
@@ -608,6 +615,8 @@
     });
   }
   const bodyHas = (key) => { const head = norm(Rt.t(key)).split('{')[0].trim(); return !!head && norm(document.body.innerText).includes(head); };
+  /** Comme bodyHas, pour un libellé qui COMMENCE par un paramètre ("{name} est capturé !") : test ligne par ligne. */
+  const lineHas = (key) => { const re = Rt.re(key); return (document.body.innerText ?? '').split(/\r?\n/).some((l) => re.test(norm(l))); };
   const dialog = () => $$('[role=dialog]').find(visible) ?? null;
   const closeDialog = () => { const d = dialog(); const c = d?.querySelector('button[aria-label]'); const close = d && $$('button', d).find((b) => norm(b.getAttribute('aria-label')) === norm(Rt.t('ui.common.close', 'Fermer'))); (close ?? c)?.click(); return !!d; };
   const go = (href) => { const a = $$(`a[href="${href}"]`).find(visible); if (a) { a.click(); return true; } return false; };
@@ -1174,7 +1183,8 @@
     const isShiny = bodyHas('ui.enc.shinyExtra') || norm(encounterText()).includes(norm(Rt.t('ui.victory.shinyPrefix', 'Chromatique')));
     // Retenu pour l'écran de capture : on y mettra la meilleure Ball
     mem.rare = (isNew || isShiny || kind === 'boss') ? { dex: foe?.dex, why: isShiny ? 'chromatique' : kind === 'boss' ? 'légendaire' : 'nouvelle espèce' } : null;
-    if (isShiny) log(`✨ CHROMATIQUE : ${foe ? Rt.nameOf(foe.dex) : '?'} !`);
+    if (isShiny) { log(`✨ CHROMATIQUE : ${foe ? Rt.nameOf(foe.dex) : '?'} !`); Stats.add('shinySeen'); notify('Chromatique !', foe ? Rt.nameOf(foe.dex) : ''); }
+    else if (kind === 'boss' && mem.legendNote !== foe?.dex) { mem.legendNote = foe?.dex; notify('Légendaire en vue', foe ? Rt.nameOf(foe.dex) : ''); }
 
     if (kind === 'wild' && bestS < CONFIG.fleeIfBestScoreBelow && !isNew && !isShiny) { const f = btn('ui.enc.flee'); if (f) { log(`🏃 fuite (meilleur score ${bestS.toFixed(2)})`); Ledger.encounter(); f.click(); return true; } }
     // Mode Pokédex : pas besoin d'XP ni de captures en double → on ne perd pas de temps sur les espèces connues
@@ -1182,11 +1192,11 @@
       const f = btn('ui.enc.flee'); if (f) { log(`🏃 déjà au Pokédex : ${foe ? Rt.nameOf(foe.dex) : '?'} (fuite)`); Ledger.encounter(); f.click(); return true; }
     }
     if (kind === 'trainer' && bestS < CONFIG.avoidTrainerIfBelow && !(CONFIG.mode === 'farm' && CONFIG.farmGoal === 'gold' && bestS >= CONFIG.avoidTrainerIfBelow * 0.7)) { const a = btn('ui.enc.avoid'); if (a) { log(`🙈 dresseur évité (score ${bestS.toFixed(2)})`); a.click(); return true; } }
-    if ((kind === 'boss' || kind === 'gym') && !teamReadyForBoss(area)) {
+    if ((kind === 'boss' || kind === 'gym') && mem.errand !== 'rebattle' && !teamReadyForBoss(area)) {
       const n = btn(['ui.enc.notYet', 'ui.enc.avoid', 'ui.enc.skip']);
       if (n) { log(`⏳ ${kind === 'gym' ? 'arène' : 'légendaire'} : pas encore, on s'entraîne`); n.click(); return true; }
     }
-    if (kind === 'boss' || kind === 'gym') noteBossFight(area);
+    if ((kind === 'boss' || kind === 'gym') && mem.errand !== 'rebattle') noteBossFight(area);
     const fight = btn(['ui.enc.fight', 'ui.area.faceIt']);
     if (fight) { mem.megaUsed = false; mem.fightKind = kind; Ledger.encounter(); log(`⚔️ rencontre ${kind}${foe ? ' : ' + Rt.nameOf(foe.dex) + ' N.' + foe.level : ''} — meneur ${cur?.m.name ?? '?'} (${(cur?.s ?? 0).toFixed(2)})`); fight.click(); return true; }
     return false;
@@ -1255,7 +1265,7 @@
     const prog = readSave()?.areaProgress?.[f.areaId];
     const won = !lost && ((prog?.gymsDefeated?.length ?? 0) > f.gyms || prog?.bossDefeated);
     if (lost) { const n = bossFails(f.areaId) + 1; setBossFails(f.areaId, n); log(`💀 défaite contre le boss (${n}) → préparation : l'équipe sera rebâtie contre son équipe avant de retenter`); }
-    else if (won) { setBossFails(f.areaId, 0); log('🏆 boss battu'); }
+    else if (won) { setBossFails(f.areaId, 0); log('🏆 boss battu'); notify('Boss battu', Rt.areaLabel(Rt.D.areas[f.areaId])); }
     mem.bossFight = null;
   }
   /** Le boss de la zone attend (manches faites, pas encore battu) : la préparation s'active. */
@@ -1401,6 +1411,9 @@
       const next = nextAreaFor(save);
       return next && readyForArea(next, save) ? next : cur;
     };
+    // Espèce visée (tous modes) : la zone ouverte où elle apparaît le plus souvent
+    const target = targetArea(save);
+    if (target) return target;
     if (CONFIG.mode === 'farm') return (CONFIG.farmGoal === 'gold' && bestGoldArea(save)) || (Rt.D.areas[CONFIG.farmAreaId] ?? cur);
     if (CONFIG.mode === 'pokedex') {
       // captures : zones avec des espèces sauvages jamais capturées ; évolutions : zones où recapturer une lignée
@@ -1408,10 +1421,48 @@
       const region = cur?.regionId ?? save?.region;
       const cand = Rt.D.areaList.find((a) => a.regionId === region && a.id !== cur?.id && isUnlocked(a, save) && !mem.travelFail.has(a.id) && !dexStalled(a) && missingSpecies(a, save).length && readyForArea(a, save));
       if (cand) return cand;
+      // Plus d'espèce sauvage : une zone où l'on trouve un fossile d'espèce manquante (objet trouvé en explorant)
+      if (CONFIG.dexFocus === 'catch') {
+        const fos = new Set(fossilTargets(save).filter((f) => !f.inShop || !CONFIG.buy.fossil).flatMap((f) => f.areas));
+        if (fos.has(cur?.id) && !dexStalled(cur)) return cur;
+        const fa = Rt.D.areaList.find((a) => fos.has(a.id) && a.id !== cur?.id && isUnlocked(a, save) && !mem.travelFail.has(a.id) && !dexStalled(a) && readyForArea(a, save));
+        if (fa) return fa;
+      }
       // Plus rien à capturer : on avance (en mode évolutions, les Pokémon en formation prennent l'XP de la zone suivante)
       return progression();
     }
     return progression();
+  }
+
+  /** Espèce visée par l'option catchTarget (null si vide, inconnue ou déjà obtenue — l'option est alors effacée). */
+  function catchTargetDex(save = readSave()) {
+    const name = String(CONFIG.catchTarget ?? '').trim();
+    if (!name) return null;
+    const dex = Rt.dexOf(name) ?? Object.values(Rt.D.species).find((sp) => norm(sp.name) === norm(name))?.dex ?? (Number.isFinite(+name) && Rt.D.species[+name] ? +name : null);
+    if (!dex) { if (mem.targetLog !== name) { mem.targetLog = name; log(`⚠️ espèce visée inconnue : « ${name} »`); } return null; }
+    if (obtainedDex(save).has(dex)) {
+      log(`🎯 objectif atteint : ${Rt.nameOf(dex)} est au Pokédex`); notify('Objectif atteint', `${Rt.nameOf(dex)} est capturé !`);
+      setOption('catchTarget', '');
+      return null;
+    }
+    return dex;
+  }
+  /** Zone ouverte (région courante) où l'espèce visée a la plus grande part des rencontres sauvages. */
+  function targetArea(save = readSave()) {
+    const dex = catchTargetDex(save);
+    if (!dex) return null;
+    const region = regionId(save);
+    let best = null;
+    for (const a of Rt.D.areaList) {
+      if (a.regionId !== region || !isUnlocked(a, save) || mem.travelFail.has(a.id) || !readyForArea(a, save)) continue;
+      const pool = (a.wildPool ?? []).filter((w) => (w.weight ?? 1) > 0);
+      const total = pool.reduce((n, w) => n + (w.weight ?? 1), 0);
+      const share = total ? pool.filter((w) => w.dex === dex).reduce((n, w) => n + (w.weight ?? 1), 0) / total : 0;
+      if (share > 0 && (!best || share > best.share)) best = { a, share };
+    }
+    if (!best) { if (mem.targetLog !== 'none:' + dex) { mem.targetLog = 'none:' + dex; log(`🎯 ${Rt.nameOf(dex)} : aucune zone ouverte de la région ne l'a en sauvage`); } return null; }
+    if (mem.targetLog !== best.a.id) { mem.targetLog = best.a.id; log(`🎯 objectif ${Rt.nameOf(dex)} : ${Rt.areaLabel(best.a)} (${Math.round(best.share * 100)} % des rencontres sauvages)`); }
+    return best.a;
   }
 
   /**
@@ -1499,6 +1550,18 @@
       if (stones.length && mem.stoneLog !== sig) { mem.stoneLog = sig; log(`💎 évolutions en attente d'un objet (achetées en boutique dès que possible) : ${stones.slice(0, 6).map((x) => `${x.mon.name} → ${Rt.nameOf(x.toDex)} (${Rt.t('item.' + x.item, x.item)})`).join(', ')}`); }
     }
 
+    // Raids : après une défaite nette, le meilleur « contre » du boss pas encore au niveau plafond prend l'XP
+    const rt = actState().raidTrain;
+    if (!prepBoss && !mem.trainee && CONFIG.raidTrain && rt && rt.until > Date.now()) {
+      const t = raidTrainee(save, rt.dex, rt.level);
+      if (!t) setActState({ raidTrain: null });
+      else {
+        if (!want.some((m) => m.id === t.m.id)) want[want.length - 1] = t.m;
+        mem.trainee = t.m.id;
+        if (mem.raidTrainLog !== t.m.id) { mem.raidTrainLog = t.m.id; log(`🎓 formation raid : ${t.m.name} N.${t.m.level} → N.${raidCfg()?.teamCap ?? 50} contre ${Rt.nameOf(rt.dex)}`); }
+      }
+    }
+
     // 1) Faire entrer un Pokémon de la Boîte s'il est meilleur
     const incoming = want.find((m) => !teamIds.has(m.id));
     if (incoming) {
@@ -1569,6 +1632,7 @@
     }).filter(Boolean);
     const legendary = bodyHas('ui.catch.theLegendary');
     const rare = legendary || !!mem.rare;
+    let picked = null;
     if (opts.length) {
       // Objet derrière chaque option ("Sans Ball" → aucun, prix 0)
       const itemOf = (o) => { const k = [...Rt.itemNameToKey.entries()].find(([n]) => o.t.startsWith(n))?.[1]; return k ? Rt.D.items[k] : null; };
@@ -1576,11 +1640,16 @@
       const pick = chooseBall(opts, { legendary, rare, why: mem.rare?.why });
       if (pick && pick.el.getAttribute('aria-pressed') !== 'true' && pick.el.getAttribute('aria-checked') !== 'true') { pick.el.click(); await sleep(250); }
       log(`🎯 capture${rare ? ' (' + (legendary ? 'légendaire' : mem.rare.why) + ')' : ''} : ${pick.t}`);
+      picked = pick.t.split(':')[0].trim();
     }
     const bait = btn(rare ? 'ui.catch.baitThrow' : 'ui.catch.baitKeep');
     if (bait) { bait.click(); return true; }
     const roll = btn(['ui.catch.roll', 'ui.catch.catch', 'ui.catch.throwAgain']);
-    if (roll) { roll.click(); return true; }
+    if (roll) {
+      const dex = mem.rare?.dex;
+      if (roll !== btn('ui.catch.throwAgain')) mem.throwPending = { at: Date.now(), ball: picked ?? Rt.t('ui.catch.noBall', 'Sans Ball'), isNew: mem.rare?.why === 'nouvelle espèce', shiny: mem.rare?.why === 'chromatique', legendary, name: dex ? Rt.nameOf(dex) : '' };
+      roll.click(); return true;
+    }
     return opts.length > 0;
   }
 
@@ -1627,6 +1696,8 @@
     // Pas prêt → on continue d'explorer : XP pour l'équipe (rebâtie contre le boss au prochain Centre)
     if (challenge && teamReadyForBoss(area, save)) { log(`🏆 défi : ${norm(challenge.innerText)}`); mem.megaUsed = false; mem.fightKind = 'gym'; noteBossFight(area); challenge.click(); return true; }
     if (CONFIG.useEvolutionItems && startItemEvolution(save)) return true;
+    if (CONFIG.schedule && applySchedule()) return true;
+    if (await errandTick(save)) return true;
     if (CONFIG.activity && (await activityTick())) return true;
     if (CONFIG.economy && (await chores(mem.forceChores))) { mem.forceChores = false; return true; }
     if (CONFIG.autoTravel && (await travel())) return true;
@@ -2000,7 +2071,7 @@
     const st = actState();
     const day = utcDay();
     const tries = st.raidTries?.day === day ? st.raidTries : { day, n: {} };
-    if (CONFIG.raidDaily && dailyRaidOpen(save) && st.raidDone !== day && (tries.n.daily ?? 0) < CONFIG.raidMaxTries) return { key: 'daily', path: '/events/raid' };
+    if (CONFIG.raidDaily && dailyRaidOpen(save) && st.raidDone !== day && (tries.n.daily ?? 0) < CONFIG.raidMaxTries && !(st.raidSkip?.daily > Date.now())) return { key: 'daily', path: '/events/raid' };
     if (CONFIG.raidLegendary) for (const r of legendaryRaids(save)) if ((tries.n[r.key] ?? 0) < CONFIG.raidMaxTries && !(st.raidSkip?.[r.key] > Date.now())) return r;
     return null;
   }
@@ -2038,6 +2109,31 @@
   }
   /** Valeur d'une équipe d'alliés PNJ : somme des valeurs de ses Pokémon (ils combattent l'un après l'autre). */
   const raidTeamValue = (dexes, level, bossDex, bossLevel) => dexes.reduce((n, d) => n + raidValue(d, level, bossDex, bossLevel), 0);
+  /** PV totaux du boss : chaque barre vaut barHp × PV max, `bars` barres. */
+  function raidBossHp(bossDex, bossLevel) {
+    const c = raidCfg() ?? {};
+    const st = Rt.E.speciesAt(bossDex, bossLevel);
+    return st ? st.maxHp * (c.barHp ?? 1) * (c.bars ?? 1) : Infinity;
+  }
+  /**
+   * Chances estimées : dégâts attendus de tout le groupe (toi + PNJ + amis) / PV totaux du boss.
+   * Les amis sont comptés comme ton équipe (leur composition n'est pas lisible à l'écran).
+   */
+  const raidOdds = (r) => (r.myValue ?? 0) * (1 + (r.friends ?? 0)) + (r.alliesValue ?? 0);
+  /** Meilleur Pokémon à entraîner pour un raid : le plus utile au niveau plafond parmi ceux qui ne l'ont pas encore. */
+  function raidTrainee(save, bossDex, bossLevel) {
+    const cap = raidCfg()?.teamCap ?? 50;
+    const mons = [...teamMons(save), ...boxMons(save)].filter((m) => m.stats && !m.fossil);
+    const ready = mons.filter((m) => m.level >= cap).map((m) => raidValue(m.dex, cap, bossDex, bossLevel)).sort((a, b) => b - a);
+    const bar = ready[2] ?? 0; // le 3e meilleur Pokémon déjà au plafond
+    let best = null;
+    for (const m of mons) {
+      if (m.level >= cap) continue;
+      const v = raidValue(m.dex, cap, bossDex, bossLevel);
+      if (v > bar && (!best || v > best.v)) best = { m, v };
+    }
+    return best;
+  }
 
   /**
    * Équipe de raid : à chaque raid, le bot ouvre "Modifier" et choisit les 3 Pokémon qui infligeront le plus de
@@ -2060,6 +2156,7 @@
         }).sort((a, b) => b.v - a.v).slice(0, 3);
         r.teamPlan = scored.map((x) => x.key);
         r.teamNames = scored.map((x) => x.name);
+        r.myValue = scored.reduce((n, x) => n + x.v, 0);
         r.rebuild = true;
       }
       const pressed = picks.filter((x) => x.getAttribute('aria-pressed') === 'true');
@@ -2087,6 +2184,29 @@
     return false;
   }
 
+  /**
+   * Amis dans le groupe : « Ajouter un ami » → la liste des amis qui ont une équipe de raid.
+   * Leurs Pokémon ne sont lisibles qu'en image ; le jeu marque d'un badge ceux qui sont recommandés
+   * (niveau suffisant et super efficaces contre le boss) : on prend l'ami qui en a le plus.
+   */
+  async function ensureRaidFriends(r) {
+    if (!CONFIG.raidFriends || r.friendsDone) return false;
+    const d = dialog();
+    if (d && norm(d.innerText).includes(norm(Rt.t('ui.raid.friendsTitle')))) {
+      if (bodyHas('ui.common.loading') && (r.friendWait = (r.friendWait ?? 0) + 1) < 20) return true;
+      const rows = $$('li button[aria-pressed]', d).filter((x) => visible(x) && enabled(x) && x.getAttribute('aria-pressed') !== 'true');
+      const badges = (x) => $$('span.relative', x).filter((sp) => sp.children.length > 1).length;
+      const best = rows.map((x) => ({ x, n: badges(x), name: x.querySelector('b')?.innerText.trim() ?? '?' })).sort((a, b) => b.n - a.n)[0];
+      if (best) { r.friends = (r.friends ?? 0) + 1; log(`👥 Raid : ${best.name} rejoint le groupe (${best.n} Pokémon recommandé${best.n > 1 ? 's' : ''})`); best.x.click(); return true; }
+      r.friendsDone = true; closeDialog(); return true;
+    }
+    const sec = document.querySelector('section[aria-labelledby="raid-group-h"]');
+    const add = sec && $$('button', sec).find((x) => visible(x) && enabled(x) && norm(x.querySelector('b')?.innerText ?? '') === norm(Rt.t('ui.raid.addFriend')));
+    if (!add || (r.friendTries = (r.friendTries ?? 0) + 1) > 3) { r.friendsDone = true; return false; }
+    add.click();
+    return true;
+  }
+
   async function playRaidPage() {
     const path = location.pathname;
     const r = mem.raid ?? (mem.raid = { key: path.startsWith('/raid/') ? path.split('/').slice(2).join('/') : 'daily', dex: +path.split('/')[3] || null, idle: 0 });
@@ -2109,7 +2229,12 @@
     const cards = $$('button[aria-label]').filter((x) => visible(x) && cardRe.test(norm(x.getAttribute('aria-label'))));
     if (cards.length) {
       const startBtn = btn('ui.raid.npcStart');
-      if (startBtn) { log('🤝 Raid : alliés choisis, c\'est parti'); startBtn.click(); return true; }
+      if (startBtn) {
+        const odds = r.dex && r.myValue != null ? raidOdds(r) / raidBossHp(r.dex, r.bossLevel ?? raidCfg()?.level ?? 50) : null;
+        r.odds = odds; r.alliesValue = 0; // le prochain essai repart d'un nouveau choix d'alliés
+        log(`🤝 Raid : alliés choisis, c'est parti${odds != null ? ` (dégâts estimés ≈ ${Math.round(odds * 100)} % des PV du boss)` : ''}`);
+        startBtn.click(); return true;
+      }
       const bossLevel = r.bossLevel ?? raidCfg()?.level ?? 50;
       const scored = cards.filter((x) => x.getAttribute('aria-pressed') !== 'true').map((x) => {
         const label = x.getAttribute('aria-label');
@@ -2118,24 +2243,36 @@
         const dexes = teamTxt.split(',').map((n) => Rt.dexOf(n.trim())).filter(Boolean);
         return { x, name: label.split(':')[0].trim(), s: r.dex ? raidTeamValue(dexes, level, r.dex, bossLevel) : dexes.length };
       }).sort((a, b) => b.s - a.s);
-      if (scored[0]) { log(`🤝 Raid : allié ${scored[0].name} (≈ ${Math.round(scored[0].s)} dégâts au boss)`); scored[0].x.click(); return true; }
+      if (scored[0]) { r.alliesValue = (r.alliesValue ?? 0) + (r.dex ? scored[0].s : 0); log(`🤝 Raid : allié ${scored[0].name} (≈ ${Math.round(scored[0].s)} dégâts au boss)`); scored[0].x.click(); return true; }
     }
     // Résultats
-    if (btn('ui.raid.again') && (bodyHas('ui.raid.result.lostTitle') || bodyHas('ui.raid.result.fledTitle'))) {
+    if (btn('ui.raid.again') && (bodyHas('ui.raid.result.lostTitle') || lineHas('ui.raid.result.fledTitle'))) {
       const n = bumpRaidTry(r.key);
+      if (bodyHas('ui.raid.result.lostTitle')) Stats.add('raidsLost');
+      // Défaite nette prévue par l'estimation : inutile d'enchaîner les essais, on s'entraîne
+      if (bodyHas('ui.raid.result.lostTitle') && r.odds != null && r.odds < CONFIG.raidMinOdds && n >= 2) {
+        const st = actState();
+        setActState({ raidSkip: { ...st.raidSkip, [r.key]: Date.now() + msToUtcMidnight() }, ...(CONFIG.raidTrain && r.dex && { raidTrain: { dex: r.dex, level: r.bossLevel ?? raidCfg()?.level ?? 50, until: Date.now() + 7 * 864e5 } }) });
+        log(`🛑 Raid : ${n} défaites, dégâts estimés ${Math.round(r.odds * 100)} % des PV du boss (< ${Math.round(CONFIG.raidMinOdds * 100)} %) → on arrête pour aujourd'hui${CONFIG.raidTrain ? ' et on entraîne un contre au Centre' : ''}`);
+        mem.raid = null; return goHome();
+      }
       if (n >= CONFIG.raidMaxTries) { log(`🛑 Raid : ${n} essais sans capture aujourd'hui — on s'entraîne et on revient demain`); mem.raid = null; return goHome(); }
       log(`🔁 Raid : essai ${n + 1}/${CONFIG.raidMaxTries}`);
       btn('ui.raid.again').click();
       return true;
     }
-    if (bodyHas('ui.raid.result.caught') || bodyHas('ui.events.raid.caught') || (r.dex && (readSave()?.pokedex ?? []).includes(r.dex) && r.key !== 'daily')) {
+    if (lineHas('ui.raid.result.caught') || bodyHas('ui.events.raid.caught') || (r.dex && (readSave()?.pokedex ?? []).includes(r.dex) && r.key !== 'daily')) {
       if (r.key === 'daily') setActState({ raidDone: utcDay() });
+      Stats.add('raidsWon');
+      if (actState().raidTrain?.dex === r.dex) setActState({ raidTrain: null });
       log(`🎉 Raid terminé (${r.dex ? Rt.nameOf(r.dex) : 'raid du jour'})`);
+      notify('Raid réussi', r.dex ? Rt.nameOf(r.dex) : 'raid du jour');
       mem.raid = null;
       const b = btn(['ui.raid.back', 'ui.common.continue']); if (b) { b.click(); return true; }
       return goHome();
     }
     if (await ensureRaidTeam(r)) return true;
+    if (await ensureRaidFriends(r)) return true;
     // Page du raid : lancer
     const start = btn(['ui.events.raid.start', 'ui.raid.progress.go', 'ui.raid.npcStart']);
     if (start) {
@@ -2177,6 +2314,222 @@
       return navTo(r.path);
     }
     return false;
+  }
+
+  /* ── 6.12 Routines : Roue de la fortune, Revanche du Conseil 4, Pension ──
+   * Une « course » (mem.errand) emmène le bot sur une page hors mode solo, s'y déroule, puis revient à l'accueil.
+   * Elles passent entre deux rencontres, avant les activités (Versus / Raids) et les achats.
+   */
+  const ERRAND_PATH = { wheel: '/events/wheel', rebattle: '/events/rebattle', dayCare: '/daycare' };
+  /** Événement ouvert à tous (config.events[id] : access "all", ou ancien format enabled) et zone de déblocage terminée. */
+  function eventOpen(id, save = readSave()) {
+    const c = Rt.D.config.events?.[id];
+    if (!c || (c.access ? c.access !== 'all' : !c.enabled)) return false;
+    if (!c.unlockAreaId) return true;
+    const p = save?.areaProgress?.[c.unlockAreaId];
+    return !!(p?.cleared || p?.bossDefeated);
+  }
+  const wheelDue = (save) => CONFIG.eventWheel && eventOpen('wheel', save) && actState().wheelDone !== utcDay();
+
+  /* Revanche du Conseil 4 (paliers bronze → diamant, 5 combats sans Centre) */
+  const rebattleTiers = () => Rt.D.config.events?.rebattle?.tiers ?? [];
+  function rebattleState(save = readSave()) {
+    const region = regionId(save);
+    const reg = Rt.D.regions[region];
+    const league = reg?.leagueAreaId && save?.areaProgress?.[reg.leagueAreaId];
+    const lineups = Rt.D.config.rebattleLineups?.[region] ?? {};
+    const tiers = rebattleTiers();
+    if (!tiers.length || !tiers.every((t) => (lineups[t.id] ?? []).length) || !(league?.cleared || league?.bossDefeated)) return null;
+    const st = save?.events?.rebattle?.[region] ?? { done: 0, step: 0 };
+    if (st.done >= tiers.length) return null;
+    const tier = tiers[st.done];
+    return { region, tier, step: st.step ?? 0, trainers: lineups[tier.id].map((id) => Rt.D.trainers[id]).filter(Boolean) };
+  }
+  /** Duels de l'équipe contre les Pokémon restants du palier (améliorations adverses + upgradeDelta, "max" = niveau max). */
+  function rebattleMatchup(rb, mons) {
+    const ready = mons.filter((m) => m.stats);
+    const maxUp = Math.max(1, ...Object.values(Rt.D.comboUp).map((l) => l.length));
+    const rows = [];
+    for (const tr of rb.trainers.slice(rb.step)) for (const tm of tr.team ?? []) {
+      const st = Rt.E.speciesAt(tm.dex, tm.level ?? 50);
+      if (!st) continue;
+      const base = tr.upgradeLevel ?? Rt.D.config.enemyUpgradeLevel ?? 1;
+      const up = rb.tier.upgradeDelta === 'max' ? maxUp : Math.min(maxUp, base + (+rb.tier.upgradeDelta || 0));
+      let best = 0;
+      for (const m of ready) best = Math.max(best, Rt.E.duelScore({ stats: m.stats, hp: m.maxHp, levels: m.levels }, { stats: st, hp: st.maxHp, levels: Rt.E.allLevels(up) }).score);
+      rows.push(Math.min(4, best));
+    }
+    if (!rows.length) return null;
+    return { avg: rows.reduce((a, b) => a + b, 0) / rows.length, worst: Math.min(...rows) };
+  }
+  function rebattleDue(save) {
+    if (!CONFIG.rebattle || !eventOpen('rebattle', save)) return false;
+    const st = actState();
+    if (st.rebattleFails?.day === utcDay() && st.rebattleFails.n >= CONFIG.rebattleMaxTries) return false;
+    const rb = rebattleState(save);
+    if (!rb) return false;
+    const mu = rebattleMatchup(rb, teamMons(save));
+    const ok = !!mu && mu.avg >= CONFIG.rebattleReadyScore && mu.worst >= CONFIG.bossWorstScore;
+    const sig = `${rb.tier.id}|${ok}`;
+    if (mem.rebattleSig !== sig) { mem.rebattleSig = sig; log(ok ? `🏅 Revanche ${rb.tier.id} : équipe prête (duel moyen ${mu.avg.toFixed(2)})` : `🏅 Revanche ${rb.tier.id} : pas encore (duel moyen ${mu ? mu.avg.toFixed(2) : '?'} / ${CONFIG.rebattleReadyScore})`); }
+    return ok;
+  }
+  function noteRebattleLoss() {
+    const st = actState(); const day = utcDay();
+    const f = st.rebattleFails?.day === day ? st.rebattleFails : { day, n: 0 };
+    f.n++; setActState({ rebattleFails: f });
+    return f.n;
+  }
+
+  /* Pension : groupes Œuf (port de qb) et choix du couple à déposer */
+  const eggInfo = (dex) => Rt.D.eggGroups?.[dex] ?? null;
+  const isDitto = (dex) => (eggInfo(dex)?.g ?? []).includes('Ditto');
+  /** Deux espèces peuvent-elles faire un Œuf ? (Métamorph avec tous sauf les légendaires ; sinon groupe commun, sexes compatibles) */
+  function canBreed(a, b) {
+    if (isDitto(a) || isDitto(b)) return eggInfo(a)?.l !== 1 && eggInfo(b)?.l !== 1;
+    const x = eggInfo(a), y = eggInfo(b);
+    if (!x || !y || x.g.includes('Undiscovered') || y.g.includes('Undiscovered') || x.s === 'N' || y.s === 'N' || (x.s && x.s === y.s)) return false;
+    return x.g.some((g) => y.g.includes(g));
+  }
+  const dayCareOf = (save) => save?.dayCare ?? { residents: [], guests: [] };
+  const dayCareOpen = (save) => (save?.pokedex?.length ?? 0) >= (Rt.D.config.dayCare?.unlockPokedex ?? 20);
+  /**
+   * Pokémon de la Boîte à déposer pour former un couple (les plus bas niveaux : ils gagnent de l'XP là-bas).
+   * Jamais l'équipe, un fossile, un chromatique ni les N meilleurs niveaux (candidats du Centre).
+   * @returns {{id, dex, level, name}|null}
+   */
+  function dayCarePick(save) {
+    const dc = dayCareOf(save);
+    const slots = Rt.D.config.dayCare?.slots ?? 2;
+    const res = dc.residents ?? [];
+    if (res.length >= slots) return null;
+    const resDex = res.map((r) => r.inst?.dex);
+    if (resDex.some((a, i) => resDex.some((b, j) => i < j && canBreed(a, b)))) return null;
+    const inTeam = new Set(save?.team ?? []);
+    const keep = new Set(boxMons(save).filter((m) => m.stats && !m.fossil).sort((a, b) => b.level - a.level).slice(0, CONFIG.centerMaxBox).map((m) => m.id));
+    const pool = (save?.box ?? []).filter((m) => !inTeam.has(m.id) && !keep.has(m.id) && m.revivesAt == null && !m.shiny && eggInfo(m.dex)).sort((a, b) => a.level - b.level);
+    const view = (m) => m && { id: m.id, dex: m.dex, level: m.level, name: Rt.nameOf(m.dex) };
+    if (resDex.length) return view(pool.find((m) => resDex.some((d) => canBreed(d, m.dex)))) ?? null;
+    // Personne : le premier d'un couple possible (son partenaire suit aussitôt)
+    for (const a of pool) if (pool.some((b) => b !== a && canBreed(a.dex, b.dex))) return view(a);
+    return null;
+  }
+  function dayCareDue(save) {
+    if (!CONFIG.dayCare || !dayCareOpen(save)) return false;
+    if (dayCareOf(save).egg) return true;
+    if (Date.now() - (mem.dayCareAt ?? 0) < CONFIG.dayCareCheckMin * 60000) return false;
+    return !!dayCarePick(save);
+  }
+
+  /** Lance une course si elle est due (appelé entre deux rencontres). */
+  async function errandTick(save) {
+    if (mem.errand) {
+      // Course en cours mais on est ailleurs (retour à l'accueil, fin d'un combat de la revanche…) : on y retourne
+      if (location.pathname === ERRAND_PATH[mem.errand]) return false;
+      if (Date.now() - (mem.errandAt ?? 0) > 120000) { log(`⚠️ ${mem.errand} : course abandonnée`); mem.errand = null; return false; }
+      if (Date.now() - (mem.errandAt ?? 0) < 8000) return false;
+      return navTo(ERRAND_PATH[mem.errand]);
+    }
+    const due = wheelDue(save) ? 'wheel' : dayCareDue(save) ? 'dayCare' : rebattleDue(save) ? 'rebattle' : null;
+    if (!due) return false;
+    mem.errand = due; mem.errandAt = Date.now();
+    log({ wheel: '🎡 Roue de la fortune : tour gratuit du jour', dayCare: '🥚 Pension : on y passe', rebattle: '🏅 Revanche du Conseil 4 : on y va' }[due]);
+    return navTo(ERRAND_PATH[due]);
+  }
+  function endErrand(msg) {
+    if (msg) log(msg);
+    if (mem.errand === 'dayCare') mem.dayCareAt = Date.now();
+    mem.errand = null; mem.dcPick = null; mem.dcDone = 0;
+    return goHome();
+  }
+
+  async function playErrand() {
+    if (Date.now() - (mem.errandAt ?? 0) > 120000 && !readBattle()) {
+      if (mem.errand === 'wheel') setActState({ wheelDone: utcDay() }); // roue injoignable (compte non connecté ?) : on réessaiera demain
+      return endErrand(`⚠️ ${mem.errand} : rien ne bouge depuis 2 min, on revient`);
+    }
+    if (mem.errand === 'wheel') return playWheel();
+    if (mem.errand === 'dayCare') return playDayCare();
+    if (mem.errand === 'rebattle') return playRebattlePage();
+    return false;
+  }
+
+  async function playWheel() {
+    const d = dialog();
+    const nice = d && btn('ui.events.wheel.nice', { scope: d });
+    if (nice) { log(`🎡 Roue : ${norm(d.innerText).slice(0, 80)}`); nice.click(); return true; }
+    const spin = btn('ui.events.wheel.spin');
+    if (spin && enabled(spin)) { mem.errandAt = Date.now(); Stats.add('spins'); spin.click(); return true; }
+    if (bodyHas('ui.events.wheel.comeBack') || bodyHas('ui.events.wheel.spentElsewhere') || bodyHas('ui.events.wheel.error')) {
+      setActState({ wheelDone: utcDay() });
+      return endErrand('🎡 Roue : fait pour aujourd’hui');
+    }
+    return true; // "Connexion…" : on attend (borné à 2 min par playErrand)
+  }
+
+  async function playRebattlePage() {
+    if (encounterKind() || readBattle()) return false; // le combat s'ouvre : les politiques habituelles jouent
+    const go = btn(['ui.events.rebattle.start', 'ui.events.rebattle.continue']);
+    if (go && enabled(go)) { mem.fightKind = 'gym'; mem.errandAt = Date.now(); log(`🏅 Revanche : ${norm(go.innerText)}`); go.click(); return true; }
+    return endErrand(bodyHas('ui.events.rebattle.allCleared') ? '🏅 Revanche : tous les paliers sont terminés' : '🏅 Revanche : rien à lancer pour l’instant');
+  }
+  /** Écrans de fin propres à la revanche (victoire, médaille, défaite). @returns {boolean} */
+  function playRebattleEnd() {
+    const d = dialog();
+    const scope = d ?? document;
+    if (bodyHas('ui.wipe.title') && bodyHas('ui.events.rebattle.lostBody')) {
+      mem.errandAt = Date.now();
+      const n = noteRebattleLoss();
+      const stop = n >= CONFIG.rebattleMaxTries;
+      const b = stop ? btn('ui.events.rebattle.later', { scope }) : btn('ui.wipe.tryAgain', { scope });
+      if (b) {
+        log(stop ? `🏅 Revanche : ${n} défaites aujourd'hui, on reprendra demain` : `🏅 Revanche : défaite ${n}/${CONFIG.rebattleMaxTries}, on recommence`);
+        if (stop) mem.errand = null;
+        b.click(); return true;
+      }
+    }
+    const great = btn('ui.events.rebattle.great', { scope });
+    if (great) { mem.errandAt = Date.now(); log('🏅 Revanche : palier terminé !'); notify('Revanche : palier terminé'); great.click(); return true; }
+    const next = btn('ui.events.rebattle.nextFight');
+    if (next) { mem.errandAt = Date.now(); Stats.add('rebattleWins'); next.click(); return true; }
+    const back = btn('ui.events.rebattle.backToPage');
+    if (back) { mem.errandAt = Date.now(); Stats.add('rebattleWins'); back.click(); return true; }
+    return false;
+  }
+
+  async function playDayCare() {
+    const d = dialog();
+    // Éclosion : animation (Échap la passe), puis un bouton pour fermer
+    if (d && norm(d.getAttribute('aria-label')) === norm(Rt.t('ui.dayCare.eggHatching'))) {
+      mem.errandAt = Date.now();
+      const done = lineHas('ui.dayCare.hatched') || lineHas('ui.dayCare.hatchedShiny');
+      const b = $$('button', d).filter((x) => visible(x) && enabled(x)).at(-1);
+      if (done && b) {
+        const shiny = lineHas('ui.dayCare.hatchedShiny');
+        const txt = $$('p', d).map((x) => x.innerText).join(' ').replace(/\s+/g, ' ').slice(0, 140);
+        Stats.add('eggs'); if (shiny) { Stats.add('shinyEggs'); notify('Œuf chromatique !', txt); }
+        log(`🐣 ${txt}`);
+        b.click(); return true;
+      }
+      d.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      return true;
+    }
+    const hatch = btn('ui.dayCare.hatchIt');
+    if (hatch) { mem.errandAt = Date.now(); log('🥚 Pension : un Œuf attend → éclosion'); hatch.click(); return true; }
+    // Choix du Pokémon à laisser
+    if (d && mem.dcPick) {
+      const p = mem.dcPick;
+      const lv = norm(Rt.t('ui.common.level.short', 'N.{n}').replace('{n}', p.level));
+      const row = $$('li button', d).find((x) => visible(x) && enabled(x) && norm(x.querySelector('b')?.innerText ?? '').startsWith(norm(p.name)) && norm(x.innerText).includes(lv));
+      if (row) { log(`🏡 Pension : ${p.name} ${lv} y reste (couple pour les Œufs, XP en plus)`); row.click(); mem.dcPick = null; mem.dcDone = (mem.dcDone ?? 0) + 1; return true; }
+      log(`⚠️ Pension : ${p.name} ${lv} introuvable dans la liste`); closeDialog(); return endErrand();
+    }
+    const save = readSave();
+    const pick = (mem.dcDone ?? 0) < 2 ? dayCarePick(save) : null;
+    const slot = pick && $$('button').find((x) => visible(x) && enabled(x) && norm(x.querySelector('b')?.innerText ?? '') === norm(Rt.t('ui.dayCare.leaveOne')));
+    if (slot) { mem.dcPick = pick; mem.errandAt = Date.now(); slot.click(); return true; }
+    const res = dayCareOf(save).residents ?? [];
+    return endErrand(res.length ? `🏡 Pension : ${res.map((r) => Rt.nameOf(r.inst?.dex)).join(' + ')}` : null);
   }
 
   /* ── 6.10 Évolutions par objet : Équipe → fiche du Pokémon → UTILISER UN OBJET → la Pierre ── */
@@ -2231,7 +2584,7 @@
   const badgeCount = (save) => save?.badges?.length ?? Object.values(save?.areaProgress ?? {}).reduce((n, p) => n + (p.gymsDefeated?.length ?? 0), 0);
   const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
   const priceOf = (key) => Rt.D.items[key]?.price ?? Infinity;
-  const FAMILY_OF_KIND = { heal: 'heal', ball: 'ball', cure: 'cure', rerolls: 'ether' };
+  const FAMILY_OF_KIND = { heal: 'heal', ball: 'ball', cure: 'cure', rerolls: 'ether', bait: 'bait', fossil: 'fossil' };
   const familyOf = (key) => FAMILY_OF_KIND[Rt.D.items[key]?.effect?.kind] ?? (isEvolutionItem(key) ? 'stone' : 'other');
   const isEvolutionItem = (key) => { mem.evoItems ??= new Set(Object.values(Rt.D.species).flatMap((s) => (s.evolutions ?? []).map((e) => e.item).filter(Boolean))); return mem.evoItems.has(key); };
 
@@ -2303,13 +2656,35 @@
       this.save();
     },
   };
-  const FAMILY_LABEL = { heal: 'soins', ball: 'Balls', rareBall: 'Balls rares', cure: 'remèdes', ether: 'Huiles', stone: 'objets d’évolution', upgrade: 'améliorations', general: 'Général', other: 'autres' };
+  const FAMILY_LABEL = { heal: 'soins', ball: 'Balls', rareBall: 'Balls rares', cure: 'remèdes', ether: 'Huiles', stone: 'objets d’évolution', bait: 'appâts', fossil: 'fossiles', upgrade: 'améliorations', general: 'Général', other: 'autres' };
+
+  /** Objet coupé par le jeu (config.itemSwitches : "off" ou réservé aux admins) — ex. l'Appât. */
+  const itemOn = (key) => !['off', 'admin'].includes(Rt.D.config.itemSwitches?.[key]);
+
+  /**
+   * Fossiles qui donneraient une espèce pas encore obtenue : en vente (achat direct → Boîte, réveil en 24 h)
+   * ou trouvables dans une zone (objet du lootPool).
+   * @returns {{key:string, dex:number, price:number, inShop:boolean, areas:string[]}[]}
+   */
+  function fossilTargets(save) {
+    const got = obtainedDex(save);
+    const region = regionId(save);
+    const badges = badgeCount(save);
+    const out = [];
+    for (const it of Object.values(Rt.D.items)) {
+      const dex = it.effect?.kind === 'fossil' ? it.effect.dex : null;
+      if (!dex || got.has(dex) || !Rt.D.species[dex] || !inRegionDex(dex, region) || !itemOn(it.key)) continue;
+      const areas = Rt.D.areaList.filter((a) => a.regionId === region && (a.lootPool ?? []).some((l) => l.itemKey === it.key && (l.weight ?? 1) > 0)).map((a) => a.id);
+      out.push({ key: it.key, dex, price: it.price ?? Infinity, inShop: !!it.inShop && (it.shopBadges ?? 0) <= badges, areas });
+    }
+    return out;
+  }
 
   /** Paliers d'une famille d'objets en vente (débloqués par les badges), du plus faible au plus fort. */
   function shopTiers(kind, field, save) {
     const badges = badgeCount(save);
     return Object.values(Rt.D.items)
-      .filter((i) => i.effect?.kind === kind && i.inShop && (i.shopBadges ?? 0) <= badges && !(kind === 'ball' && i.effect.bonus >= 10))
+      .filter((i) => i.effect?.kind === kind && i.inShop && itemOn(i.key) && (i.shopBadges ?? 0) <= badges && !(kind === 'ball' && i.effect.bonus >= 10))
       .sort((a, b) => (a.effect[field] ?? 0) - (b.effect[field] ?? 0) || a.price - b.price);
   }
   /** Stock "équivalent" d'un palier : cet objet ET les plus forts de la même famille. */
@@ -2426,9 +2801,17 @@
     }
     const ether = shopTiers('rerolls', 'amount', save)[0];
     if (CONFIG.buy.ether && ether && badgeCount(save) >= 3 && (have[ether.key] ?? 0) < CONFIG.stock.ether) out.push({ key: ether.key, qty: CONFIG.stock.ether - (have[ether.key] ?? 0), family: 'ether' });
+    // Appât : lancé quand une Ball échoue de peu sur une nouvelle espèce, un chromatique ou un légendaire
+    const bait = shopTiers('bait', 'x', save)[0];
+    const baitHave = Object.entries(have).reduce((n, [k, q]) => n + (Rt.D.items[k]?.effect?.kind === 'bait' ? q : 0), 0);
+    if (CONFIG.buy.bait && bait && baitHave < (CONFIG.stock.bait ?? 0)) out.push({ key: bait.key, qty: CONFIG.stock.bait - baitHave, family: 'bait' });
+    // Fossiles en vente pour une espèce manquante (mode Pokédex : captures) : un seul exemplaire suffit
+    if (CONFIG.buy.fossil && CONFIG.mode === 'pokedex' && CONFIG.dexFocus === 'catch') {
+      for (const f of fossilTargets(save)) if (f.inShop && !(have[f.key] > 0)) out.push({ key: f.key, qty: 1, family: 'fossil' });
+    }
 
-    // Urgences d'abord, puis soins > Balls > meilleures Balls > objets d'évolution > remèdes > Huile
-    const order = { heal: 0, ball: 1, rareBall: 2, stone: 3, cure: 4, ether: 5 };
+    // Urgences d'abord, puis soins > Balls > meilleures Balls > appâts > objets d'évolution > fossiles > remèdes > Huile
+    const order = { heal: 0, ball: 1, rareBall: 2, bait: 3, stone: 4, fossil: 5, cure: 6, ether: 7 };
     return out.sort((a, b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0) || order[a.family] - order[b.family]);
   }
 
@@ -2530,6 +2913,8 @@
     return alt;
   }
 
+  /** "Chance de capture" (seconde chance quand la Ball rate) : autorisée, ou d'office en mode Pokédex (captures). */
+  const wantLuck = () => CONFIG.buy.luck || (CONFIG.pokedexLuck && CONFIG.mode === 'pokedex' && CONFIG.dexFocus === 'catch');
   /** Améliorations "Général" : niveau courant lu dans la sauvegarde, sinon mémorisé lors de la dernière visite. */
   const GENERAL_KEY = 'pokebot.general';
   const generalLevels = () => { try { return JSON.parse(localStorage.getItem(GENERAL_KEY)) ?? {}; } catch { return {}; } };
@@ -2540,7 +2925,7 @@
     const out = [];
     const lvlOf = (k) => (typeof save?.general?.[k] === 'number' ? save.general[k] : save?.general?.[k]?.level ?? known[k] ?? 0);
     if (CONFIG.buy.offline) { const l = lvlOf('offline'); const row = cfg.offline?.[l]; if (row && l < CONFIG.offlineMaxLevel) out.push({ key: 'offline', name: Rt.t('ui.general.offline.name', 'Gains hors ligne'), cost: row.cost, level: l }); }
-    if (CONFIG.buy.luck) { const l = lvlOf('luck'); const row = cfg.luck?.[l]; if (row && l < CONFIG.luckMaxLevel) out.push({ key: 'luck', name: Rt.t('ui.general.luck.name', 'Chance de capture'), cost: row.cost, level: l }); }
+    if (wantLuck()) { const l = lvlOf('luck'); const row = cfg.luck?.[l]; if (row && l < CONFIG.luckMaxLevel) out.push({ key: 'luck', name: Rt.t('ui.general.luck.name', 'Chance de capture'), cost: row.cost, level: l }); }
     return out;
   }
 
@@ -2728,6 +3113,109 @@
     return true;
   }
 
+  /* ── 6.13 Confort : notifications, statistiques de session, planning ── */
+  /**
+   * Notification du navigateur (+ petit son). La permission est demandée quand on démarre le bot
+   * (un clic de l'utilisateur est nécessaire) ; sans permission, seul le son et le journal restent.
+   */
+  function notify(title, body = '') {
+    if (!CONFIG.notify) return;
+    try { if (typeof Notification !== 'undefined' && Notification.permission === 'granted') new Notification(`PokéBot · ${title}`, { body, tag: 'pokebot-' + title, silent: true }); } catch {}
+    if (CONFIG.notifySound) beep();
+  }
+  function beep() {
+    try {
+      const Ctx = window.AudioContext ?? window.webkitAudioContext;
+      if (!Ctx) return;
+      const ctx = (mem.audio ??= new Ctx());
+      const t0 = ctx.currentTime;
+      for (const [i, f] of [660, 880].entries()) {
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.frequency.value = f; g.gain.setValueAtTime(0.08, t0 + i * 0.15); g.gain.exponentialRampToValueAtTime(0.001, t0 + i * 0.15 + 0.14);
+        o.connect(g).connect(ctx.destination); o.start(t0 + i * 0.15); o.stop(t0 + i * 0.15 + 0.15);
+      }
+    } catch {}
+  }
+  /**
+   * Anti-veille : Screen Wake Lock du navigateur. Tant que le bot tourne et que l'onglet est visible,
+   * l'écran ne s'éteint pas et le PC ne se met pas en veille. Le navigateur libère le verrou quand l'onglet
+   * est caché ou réduit : on le redemande au retour. Il ne protège pas d'une fermeture du capot ni d'une
+   * mise en veille forcée par Windows (batterie faible, stratégie de l'entreprise).
+   */
+  const WakeLock = {
+    lock: null,
+    async on() {
+      if (!CONFIG.keepAwake || this.lock || document.hidden) return;
+      try {
+        if (!navigator.wakeLock?.request) { if (!mem.wakeWarned) { mem.wakeWarned = true; log('☕ anti-veille indisponible dans ce navigateur'); } return; }
+        this.lock = await navigator.wakeLock.request('screen');
+        this.lock.addEventListener?.('release', () => { this.lock = null; });
+        if (!mem.wakeLogged) { mem.wakeLogged = true; log('☕ anti-veille actif : l’écran et le PC restent éveillés tant que le bot tourne'); }
+      } catch (e) { this.lock = null; if (!mem.wakeWarned) { mem.wakeWarned = true; log(`☕ anti-veille refusé par le navigateur (${e.message})`); } }
+    },
+    async off() { const l = this.lock; this.lock = null; try { await l?.release(); } catch {} },
+  };
+  const askNotifyPermission = () => { try { if (CONFIG.notify && typeof Notification !== 'undefined' && Notification.permission === 'default') Notification.requestPermission(); } catch {} };
+
+  /**
+   * Statistiques de session (pokebot.stats) : captures, chromatiques, lancers de Ball par Ball, raids, Œufs, roue.
+   * Mémorisées dans le navigateur, remises à zéro depuis l'onglet Bilan.
+   */
+  const STATS_KEY = 'pokebot.stats';
+  const Stats = {
+    d: null,
+    data() { if (!this.d) { try { this.d = JSON.parse(localStorage.getItem(STATS_KEY)); } catch {} this.d ??= this.blank(); } return this.d; },
+    blank: () => ({ since: Date.now(), caught: 0, newSpecies: 0, shinySeen: 0, shinyCaught: 0, throws: {}, raidsWon: 0, raidsLost: 0, eggs: 0, shinyEggs: 0, spins: 0, rebattleWins: 0 }),
+    add(k, n = 1) { const d = this.data(); d[k] = (d[k] ?? 0) + n; this.save(); },
+    /** Un lancer de Ball : par nom affiché, réussi ou non. */
+    throw(ball, ok) { const d = this.data(); const t = (d.throws[ball] ??= { n: 0, ok: 0 }); t.n++; if (ok) t.ok++; this.save(); },
+    save() { try { localStorage.setItem(STATS_KEY, JSON.stringify(this.d)); } catch {} },
+    reset() { this.d = this.blank(); this.save(); },
+  };
+  /** Issue du dernier lancer : le texte de résultat (capturé / raté / il reste) apparaît après le lancer. */
+  function noteCatchResult() {
+    const p = mem.throwPending;
+    if (!p) return;
+    const caught = lineHas('ui.catch.caught'), missed = bodyHas('ui.catch.missed') || lineHas('ui.catch.stayed');
+    if (!caught && !missed) { if (Date.now() - p.at > 15000) mem.throwPending = null; return; }
+    mem.throwPending = null;
+    Stats.throw(p.ball, caught);
+    if (!caught) return;
+    Stats.add('caught');
+    if (p.isNew) Stats.add('newSpecies');
+    if (p.shiny) { Stats.add('shinyCaught'); notify('Chromatique capturé !', p.name); }
+    else if (p.legendary) notify('Légendaire capturé !', p.name);
+  }
+
+  /**
+   * Planning : "08:00-23:00=pokedex; 23:00-08:00=farm". Plages à l'heure locale, la fin peut passer minuit.
+   * @returns {{from:number, to:number, mode:string}[]} minutes depuis minuit
+   */
+  function parseSchedule(txt) {
+    const out = [];
+    for (const part of String(txt ?? '').split(/[;\n]+/)) {
+      const m = part.trim().match(/^(\d{1,2})(?::(\d{2}))?\s*-\s*(\d{1,2})(?::(\d{2}))?\s*=\s*([\w]+)$/);
+      if (!m || !MODES[m[5]]) continue;
+      out.push({ from: (+m[1] % 24) * 60 + (+m[2] || 0), to: (+m[3] % 24) * 60 + (+m[4] || 0), mode: m[5] });
+    }
+    return out;
+  }
+  /** Mode prévu par le planning à cette heure (null si aucune plage ne couvre l'instant). */
+  function scheduledMode(txt = CONFIG.schedule, date = new Date()) {
+    const t = date.getHours() * 60 + date.getMinutes();
+    const r = parseSchedule(txt).find((x) => (x.from <= x.to ? t >= x.from && t < x.to : t >= x.from || t < x.to));
+    return r?.mode ?? null;
+  }
+  /** Applique le planning entre deux rencontres (le mode choisi à la main reste tant qu'aucune plage ne s'applique). */
+  function applySchedule() {
+    const want = scheduledMode();
+    const cur = CONFIG.activity ?? CONFIG.modeKey ?? CONFIG.mode;
+    if (!want || want === cur) return false;
+    log(`⏰ planning : passage en mode ${MODES[want].label}`);
+    setMode(want, { farmAreaId: want === 'farm' ? CONFIG.farmAreaId ?? readSave()?.currentAreaId : undefined });
+    return true;
+  }
+
   /* ═════════════════════════════ 7. BOT ═════════════════════════════ */
   const bot = {
     running: false, busy: false, lastActionAt: 0, idleTicks: 0, stats: { actions: 0 }, timer: null, ready: false, awaitingChange: false, observer: null,
@@ -2739,7 +3227,8 @@
       // Après une action, on attend que l'écran réagisse (ou au plus actionCooldownMs) avant d'agir de nouveau
       if (this.awaitingChange && since < CONFIG.actionCooldownMs) return;
       // Pages hors mode solo (classement, Versus, raids, échanges…) : on en ressort immédiatement
-      const actPage = ((CONFIG.activity === 'versus' || mem.vsDefense) && location.pathname.startsWith('/versus')) || (CONFIG.activity === 'raid' && /^\/(raid|events)\//.test(location.pathname));
+      const actPage = ((CONFIG.activity === 'versus' || mem.vsDefense) && location.pathname.startsWith('/versus')) || (CONFIG.activity === 'raid' && /^\/(raid|events)\//.test(location.pathname))
+        || (mem.errand && location.pathname === ERRAND_PATH[mem.errand]);
       if (!actPage && /versus|raid|leaderboard|trade|friends|daycare|events/i.test(location.pathname)) {
         const back = btn(['ui.common.backHome', 'ui.common.back']);
         if (back) back.click(); else if (!go('/home')) history.back();
@@ -2752,6 +3241,7 @@
         const path = location.pathname;
         Ledger.observe(readSave());
         Ledger.report();
+        noteCatchResult();
         const tuto = btn('ui.oak.gotIt');
         if (tuto) { tuto.click(); acted = true; where = 'tuto'; }
 
@@ -2765,6 +3255,7 @@
           }
         }
 
+        if (!acted && mem.errand === 'rebattle' && playRebattleEnd()) { acted = true; where = 'rebattle'; }
         if (!acted && bodyHas('ui.wipe.title')) { const r = btn('ui.wipe.tryAgain'); if (r) { settleBossFight(true); log('💀 équipe K.O. → réessayer'); r.click(); acted = true; } }
 
         if (!acted && path.startsWith('/versus') && (CONFIG.activity === 'versus' || mem.vsDefense)) { where = 'versus'; acted = await playVersus(); if (!acted) acted = true; }
@@ -2775,7 +3266,8 @@
 
         if (!acted && (bodyHas('ui.catch.tip') || btn(['ui.catch.roll', 'ui.catch.catch']))) { where = 'catch'; acted = await playCatch(); }
 
-        if (!acted && CONFIG.activity === 'raid' && /^\/(raid|events)\//.test(path)) { where = 'raid'; acted = await playRaidPage(); if (!acted && !readBattle()) acted = false; }
+        if (!acted && mem.errand && path === ERRAND_PATH[mem.errand]) { where = mem.errand; acted = await playErrand(); }
+        if (!acted && !mem.errand && CONFIG.activity === 'raid' && /^\/(raid|events)\//.test(path)) { where = 'raid'; acted = await playRaidPage(); if (!acted && !readBattle()) acted = false; }
         if (!acted && path === '/shop' && mem.choresStep === 'shop') { where = 'shop'; acted = await playShop(); }
         if (!acted && path === '/upgrades' && mem.choresStep === 'upgrades') { where = 'upgrades'; acted = await playUpgrades(); }
         if (!acted && path === '/team' && mem.evolve) { where = 'evolve'; acted = await playItemEvolution(); }
@@ -2798,6 +3290,7 @@
             const snap = $$('button').filter(visible).map((x) => norm(x.innerText) || x.getAttribute('aria-label')).filter(Boolean).slice(0, 15).join(' / ');
             log(`❓ écran non reconnu (${location.pathname}) : ${snap}`);
             this.stop('écran non reconnu');
+            notify('Bot arrêté', `écran non reconnu (${location.pathname})`);
           }
         }
       } catch (e) {
@@ -2808,6 +3301,8 @@
     async start() {
       if (!this.ready) { await Rt.load(); this.ready = true; loadSettings(); ui.fillAreas(); }
       this.running = true; this.idleTicks = 0;
+      askNotifyPermission();
+      WakeLock.on();
       this.timer ??= setInterval(() => this.tick(), CONFIG.tickMs);
       this.watchScreen();
       applyShortAnimations();
@@ -2829,10 +3324,11 @@
       });
       this.observer.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['disabled', 'aria-disabled', 'aria-pressed', 'aria-expanded', 'aria-label'] });
       document.addEventListener('visibilitychange', () => {
+        if (this.running && !document.hidden) WakeLock.on(); // le verrou saute quand l'onglet est caché
         if (this.running && document.hidden) log('⚠️ onglet en arrière-plan : Chrome ralentit fortement le jeu (tour ×3 mesuré). Garde la fenêtre visible.');
       });
     },
-    stop(reason = 'manuel') { this.running = false; if (reason === 'manuel') writeSettings({ running: false }); log('⏸ arrêté : ' + reason); ui.refresh(reason); },
+    stop(reason = 'manuel') { this.running = false; WakeLock.off(); if (reason === 'manuel') writeSettings({ running: false }); log('⏸ arrêté : ' + reason); ui.refresh(reason); },
     toggle() { this.running ? this.stop() : this.start(); },
   };
 
@@ -2879,6 +3375,7 @@
   /** Change un réglage (chemin "buy.heal", "stock.rareBall"…) et le mémorise. */
   function setOption(path, value, { persist = true } = {}) {
     setPath(CONFIG, path, value);
+    if (path === 'keepAwake' && typeof WakeLock !== 'undefined') { if (value && bot.running) WakeLock.on(); else WakeLock.off(); }
     if (persist) writeSettings({ cfg: { ...readSettings().cfg, [path]: value } });
     mem.lastChoresGold = -1; mem.centerDone = null; mem.goldArea = null; mem.saveLog = null;
     if (path === 'activityFallback' && CONFIG.activity) setMode(CONFIG.activity);
@@ -2922,7 +3419,10 @@
         { p: 'buy.offline', t: 'bool', l: 'Gains hors ligne (Général)' },
         { p: 'offlineMaxLevel', t: 'num', l: '↳ jusqu’au niveau', min: 0, max: 10 },
         { p: 'buy.luck', t: 'bool', l: 'Chance de capture (Général, cher)' },
+        { p: 'pokedexLuck', t: 'bool', l: '↳ toujours en mode Pokédex : captures', h: 'Seconde chance quand la Ball rate : le Pokémon peut rester pour un autre lancer.' },
         { p: 'luckMaxLevel', t: 'num', l: '↳ jusqu’au niveau', min: 0, max: 10 },
+        { p: 'buy.bait', t: 'bool', l: 'Appâts (lancés quand une Ball rate de peu)' },
+        { p: 'buy.fossil', t: 'bool', l: 'Fossiles d’espèces manquantes (mode Pokédex)' },
         { p: 'buy.sell', t: 'bool', l: 'Revendre les surplus (½ prix)' },
       ] },
       { title: 'Budget', fields: [
@@ -2936,6 +3436,7 @@
       { title: 'Part max de l’or par achat', fields: [
         { p: 'shopShares.heal', t: 'pct', l: 'Soins' }, { p: 'shopShares.ball', t: 'pct', l: 'Balls' }, { p: 'shopShares.rareBall', t: 'pct', l: 'Meilleure Ball' },
         { p: 'shopShares.stone', t: 'pct', l: 'Objets d’évolution' }, { p: 'shopShares.cure', t: 'pct', l: 'Remèdes' }, { p: 'shopShares.ether', t: 'pct', l: 'Huiles' },
+        { p: 'shopShares.bait', t: 'pct', l: 'Appâts' }, { p: 'shopShares.fossil', t: 'pct', l: 'Fossiles' },
         { p: 'shopShares.urgent', t: 'pct', l: 'Urgence (stock à zéro)' },
       ] },
     ] },
@@ -2948,6 +3449,7 @@
         { p: 'ballMinStock', t: 'num', l: 'Balls : minimum', min: 0 }, { p: 'ballMaxStock', t: 'num', l: 'Balls courantes : maximum', min: 0 },
         { p: 'stock.rareBall', t: 'num', l: 'Réserve de meilleures Balls', min: 0 },
         { p: 'stock.cure', t: 'num', l: 'Remèdes (par type)', min: 0 }, { p: 'stock.ether', t: 'num', l: 'Huiles', min: 0 },
+        { p: 'stock.bait', t: 'num', l: 'Appâts', min: 0 },
         { p: 'stock.heal', t: 'num', l: 'Soins avant mesure (repli)', min: 0 }, { p: 'stock.ball', t: 'num', l: 'Balls avant mesure (repli)', min: 0 },
         { p: 'healTargetRatio', t: 'pct', l: 'Palier de soin : rend ≥ % des PV max', h: '40 PV × 50 % = 20 → Potion suffit.' },
       ] },
@@ -2979,6 +3481,7 @@
     ] },
     { tab: 'Captures', icon: '🎯', groups: [
       { title: 'Choix de la Ball (chance exacte : dé 1–6 + bonus ≥ difficulté)', fields: [
+        { p: 'catchTarget', t: 'text', l: 'Espèce visée (nom affiché en jeu, vide = aucune)', h: 'Le bot va dans la zone ouverte où elle apparaît le plus et la capture avec la meilleure Ball. L’objectif s’efface une fois l’espèce au Pokédex.' },
         { p: 'catchNewPct', t: 'num', l: 'Nouvelle espèce : viser au moins (%)', min: 30, max: 100, step: 5 },
         { p: 'catchKnown', t: 'sel', l: 'Espèce déjà capturée', o: [['free', 'Sans Ball (gratuit)'], ['cheap', 'Ball la moins chère'], ['normal', 'la moins chère qui atteint le % ci-dessous']] },
         { p: 'catchMinPct', t: 'num', l: '↳ % visé', min: 0, max: 100, step: 5 },
@@ -3018,6 +3521,17 @@
         { p: 'raidLegendary', t: 'bool', l: 'Raids légendaires (zones terminées)' },
         { p: 'raidMaxTries', t: 'num', l: 'Essais max par raid et par jour', min: 1, max: 50 },
         { p: 'raidAutoTeam', t: 'bool', l: 'Choisir l’équipe de raid contre le boss' },
+        { p: 'raidFriends', t: 'bool', l: 'Ajouter des amis au groupe (compte connecté)' },
+        { p: 'raidMinOdds', t: 'pct', l: 'Arrêter après 2 défaites si dégâts estimés <', h: 'Dégâts attendus du groupe / PV totaux du boss.' },
+        { p: 'raidTrain', t: 'bool', l: '↳ puis entraîner au Centre un contre du boss' },
+      ] },
+      { title: 'Événements et routines (tous modes)', fields: [
+        { p: 'eventWheel', t: 'bool', l: 'Roue de la fortune : tour gratuit du jour' },
+        { p: 'dayCare', t: 'bool', l: 'Pension : faire éclore les Œufs et déposer un couple' },
+        { p: 'dayCareCheckMin', t: 'num', l: '↳ y passer au plus toutes les N min', min: 5, max: 600, step: 5 },
+        { p: 'rebattle', t: 'bool', l: 'Revanche du Conseil 4 quand l’équipe est prête' },
+        { p: 'rebattleReadyScore', t: 'num', l: '↳ duel moyen exigé', min: 0.5, max: 4, step: 0.05 },
+        { p: 'rebattleMaxTries', t: 'num', l: '↳ défaites max par jour', min: 1, max: 20 },
       ] },
     ], special: 'activity' },
     { tab: 'Bilan', icon: '📊', special: 'ledger' },
@@ -3025,6 +3539,12 @@
       { title: 'Affichage', fields: [
         { p: 'showStatus', t: 'bool', l: 'Afficher ce que fait le bot (ligne sous la barre)' },
         { p: 'showGoldRate', t: 'bool', l: 'Afficher l’or et les ₽ gagnés par heure' },
+        { p: 'notify', t: 'bool', l: 'Notifications (chromatique, légendaire, boss, bot arrêté…)', h: 'Le navigateur demande l’autorisation au démarrage du bot.' },
+        { p: 'notifySound', t: 'bool', l: '↳ avec un petit son' },
+        { p: 'keepAwake', t: 'bool', l: 'Anti-veille : le PC ne se met pas en veille pendant que le bot tourne', h: 'Verrou d’écran du navigateur (Wake Lock). Garde l’onglet visible : réduit ou caché, le navigateur le libère.' },
+      ] },
+      { title: 'Planning', fields: [
+        { p: 'schedule', t: 'text', l: 'Plages horaires', h: 'Exemple : 08:00-23:00=pokedex; 23:00-08:00=farm — modes : ' + Object.keys(MODES).join(', ') + '. Vide = désactivé.' },
       ] },
       { title: 'Vitesse & journal', fields: [
         { p: 'shortAnimations', t: 'bool', l: 'Animations courtes (au prochain rechargement)' },
@@ -3058,6 +3578,7 @@
     h4{margin:8px 0 4px;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#e5533d}
     label.f{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:11px;padding:2px 0;border-bottom:1px dotted #c9c0a3}
     label.f span{flex:1}
+    input[type=text]{width:190px;font-size:11px;padding:2px 4px;border:1px solid #24304f;border-radius:4px;background:#fff;color:#24304f}
     input[type=number]{width:70px;font-size:11px;padding:2px 4px;border:1px solid #24304f;border-radius:4px;background:#fff;color:#24304f}
     input[type=checkbox]{width:15px;height:15px;accent-color:#e5533d}
     label.f select{max-width:190px;padding:2px;border-width:1px}
@@ -3123,6 +3644,7 @@
       let input;
       if (f.t === 'bool') input = h('input', { type: 'checkbox', checked: !!v, onchange: () => setOption(f.p, input.checked) });
       else if (f.t === 'sel') { input = h('select', { onchange: () => setOption(f.p, input.value) }); for (const [val, lab] of f.o) input.add(new Option(lab, val, false, val === v)); }
+      else if (f.t === 'text') input = h('input', { type: 'text', value: v ?? '', placeholder: f.h?.split(' — ')[0] ?? '', onchange: () => setOption(f.p, input.value.trim()) });
       else {
         const pct = f.t === 'pct';
         input = h('input', { type: 'number', value: pct ? Math.round((v ?? 0) * 100) : v ?? 0, min: pct ? 0 : f.min ?? '', max: pct ? 300 : f.max ?? '', step: pct ? 5 : f.step ?? 1,
@@ -3150,9 +3672,28 @@
         h('table', {}, wish.length ? wish.map((w) => row(`${Rt.t('item.' + w.key, w.key)}${w.urgent ? ' ⚠️' : ''}`, `×${w.qty} · ₽${w.qty * priceOf(w.key)}`)) : row('rien à acheter', '—')),
         h('div', { className: 'muted' }, plan.species.length ? 'Espèces à capturer : ' + plan.species.slice(0, 8).map((x) => `${Rt.nameOf(x.dex)} (diff. ${x.need} → ${x.key ? Rt.t('item.' + x.key, x.key) : 'Sans Ball'} ${Math.round(x.pct * 100)} %)`).join(', ') : 'Aucune espèce manquante dans les zones visées.'),
         h('div', { className: 'muted' }, pick ? `Amélioration la plus rentable : ${pick.label} (₽${pick.cost}) — budget améliorations ₽${upgradeBudget(save)}` : 'Aucune amélioration autorisée.'),
+        ...this.statsView(),
         h('div', { className: 'btns' },
           h('button', { onclick: () => { Ledger.report(true); } }, '📝 Bilan dans le journal'),
           h('button', { onclick: () => { Ledger.reset(); log('📊 bilan remis à zéro'); this.renderPanel(); } }, '♻️ Remettre à zéro')),
+      ];
+    },
+    statsView() {
+      const d = Stats.data();
+      const row = (k, v) => h('tr', {}, h('td', {}, k), h('td', { className: 'n' }, v));
+      const hours = (Date.now() - d.since) / 36e5;
+      const throws = Object.entries(d.throws).sort((a, b) => b[1].n - a[1].n).map(([k, t]) => row('  ' + k, `${t.ok}/${t.n} (${Math.round((t.ok / Math.max(1, t.n)) * 100)} %)`));
+      return [
+        h('h4', {}, `Statistiques depuis ${hours < 1 ? Math.round(hours * 60) + ' min' : hours.toFixed(1) + ' h'}`),
+        h('table', {},
+          row('Captures', `${d.caught} (dont ${d.newSpecies} nouvelles espèces)`),
+          row('Chromatiques', `${d.shinyCaught} capturés / ${d.shinySeen} vus`),
+          row('Lancers de Ball (réussis / lancés)', ''), ...throws,
+          row('Raids', `${d.raidsWon} gagnés · ${d.raidsLost} perdus`),
+          row('Œufs éclos', `${d.eggs}${d.shinyEggs ? ` (dont ${d.shinyEggs} chromatique${d.shinyEggs > 1 ? 's' : ''})` : ''}`),
+          row('Roue de la fortune', `${d.spins} tour${d.spins > 1 ? 's' : ''}`),
+          row('Revanche : victoires', String(d.rebattleWins))),
+        h('div', { className: 'btns' }, h('button', { onclick: () => { Stats.reset(); log('📈 statistiques remises à zéro'); this.renderPanel(); } }, '♻️ Statistiques à zéro')),
       ];
     },
     activityView() {
@@ -3169,7 +3710,11 @@
           best ? h('tr', {}, h('td', {}, '  équipe conseillée'), h('td', { className: 'n' }, best.dex.map((d) => Rt.nameOf(d)).join(' → '))) : null,
           h('tr', {}, h('td', {}, 'Raid du jour'), h('td', { className: 'n' }, dailyRaidOpen(save) ? (st.raidDone === utcDay() ? 'fait aujourd’hui' : 'disponible') : `verrouillé (termine ${Rt.areaLabel(Rt.D.areas[c?.unlockAreaId])})`)),
           h('tr', {}, h('td', {}, 'Raids légendaires ouverts'), h('td', { className: 'n' }, String(save ? legendaryRaids(save).length : 0))),
-          h('tr', {}, h('td', {}, 'Prochain raid'), h('td', { className: 'n' }, r ? (r.key === 'daily' ? 'raid du jour' : Rt.nameOf(r.dex)) : '—'))),
+          h('tr', {}, h('td', {}, 'Prochain raid'), h('td', { className: 'n' }, r ? (r.key === 'daily' ? 'raid du jour' : Rt.nameOf(r.dex)) : '—')),
+          st.raidTrain?.until > Date.now() ? h('tr', {}, h('td', {}, '  entraînement raid'), h('td', { className: 'n' }, `contre ${Rt.nameOf(st.raidTrain.dex)}`)) : null,
+          h('tr', {}, h('td', {}, 'Roue de la fortune'), h('td', { className: 'n' }, !eventOpen('wheel', save) ? 'fermée' : st.wheelDone === utcDay() ? 'tournée aujourd’hui' : 'tour gratuit dispo')),
+          h('tr', {}, h('td', {}, 'Pension'), h('td', { className: 'n' }, !dayCareOpen(save) ? `verrouillée (${Rt.D.config.dayCare?.unlockPokedex ?? 20} espèces)` : dayCareOf(save).egg ? 'un Œuf attend' : (dayCareOf(save).residents ?? []).map((x) => Rt.nameOf(x.inst?.dex)).join(' + ') || 'vide')),
+          h('tr', {}, h('td', {}, 'Revanche du Conseil 4'), h('td', { className: 'n' }, (() => { const rb = save && eventOpen('rebattle', save) ? rebattleState(save) : null; return rb ? `palier ${rb.tier.id}, combat ${rb.step + 1}` : 'fermée ou terminée'; })()))),
         mem.vsField?.length && n50 >= 3 ? (() => { const d = bestDefenseTeam(save, mem.vsField); return d ? h('div', { className: 'muted' }, `Défense conseillée : ${d.dex.map((x) => Rt.nameOf(x)).join(' → ')} — repousse ${d.held}/${d.total} équipes connues`) : null; })() : null,
         st.vsDefenseAt ? h('div', { className: 'muted' }, `Dernière équipe de défense : ${new Date(st.vsDefenseAt).toLocaleString()}`) : null,
         h('div', { className: 'btns' },
@@ -3282,11 +3827,14 @@
     menu('🛒 Courses maintenant', () => { mem.forceChores = true; mem.lastChoresGold = -1; });
     menu('📊 Bilan dans le journal', () => Ledger.report(true));
     menu('🛡️ Versus : meilleure équipe de défense', () => requestDefenseTeam());
+    menu('🎡 Roue / 🥚 Pension : y aller maintenant', () => { setActState({ wheelDone: null }); mem.dayCareAt = 0; });
   }
 
   const api = { itemEvolutions, evolutionTargets, healTierFor, shopTiers, bot, CONFIG, MODES, DEFAULTS, setMode, setOption, resetOptions, setTeamLock, bossMatchup, bossTeam, journal, Rt, mem, readBattle, teamMons, boxMons,
     upgradeCandidates, upgradePick, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, nextRaid, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
-    areaThreats, missingSpecies, desiredArea, buildData, Engine };
+    areaThreats, missingSpecies, desiredArea, buildData, Engine,
+    obtainedDex, fossilTargets, catchTargetDex, targetArea, wantLuck, canBreed, dayCarePick, dayCareDue, eventOpen, rebattleState, rebattleMatchup, rebattleDue,
+    raidBossHp, raidOdds, raidTrainee, parseSchedule, scheduledMode, Stats, noteCatchResult, notify, WakeLock };
   root.PokeBot = api;
   // Hook de débogage : évalue du code DANS la portée du script (permet de patcher une fonction à chaud).
   root.PokeBot.__eval = (src) => eval(src); // eslint-disable-line no-eval

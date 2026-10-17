@@ -6,6 +6,27 @@ Chaque section `## [X.Y.Z]` correspond à un tag `vX.Y.Z`. Les notes de la relea
 
 ## [Non publié]
 
+## [1.6.0]
+
+### Ajouté
+
+- Capture : l'amélioration « Chance de capture » (seconde chance quand la Ball rate) est achetée d'office en mode Pokédex : captures (`pokedexLuck`).
+- Capture : achat d'appâts (`buy.bait`, `stock.bait`), lancés quand une Ball rate de peu. Ignorés si le jeu a coupé l'objet (`itemSwitches`).
+- Capture : espèce visée (`catchTarget`). Le bot va dans la zone ouverte où elle apparaît le plus, puis l'objectif s'efface une fois l'espèce au Pokédex.
+- Mode Pokédex : les fossiles d'espèces manquantes sont achetés en boutique (`buy.fossil`) ou cherchés dans la zone qui les donne.
+- Raids : ajout d'amis au groupe (`raidFriends`), choisis sur le nombre de Pokémon recommandés par le jeu.
+- Raids : estimation des chances (dégâts du groupe / PV totaux du boss). Sous `raidMinOdds`, le bot arrête après 2 défaites et entraîne au Centre le meilleur « contre » pas encore au niveau plafond (`raidTrain`).
+- Routines tous modes : tour gratuit de la Roue de la fortune (`eventWheel`), Pension (`dayCare` : éclosion des Œufs, dépôt d'un couple compatible), Revanche du Conseil 4 (`rebattle`, désactivée par défaut).
+- Notifications du navigateur et petit son (`notify`, `notifySound`) : chromatique, légendaire, boss battu, raid réussi, Œuf chromatique, objectif atteint, bot arrêté.
+- Planning par plages horaires (`schedule`).
+- Anti-veille (`keepAwake`, activé par défaut) : verrou d'écran du navigateur (Wake Lock) tant que le bot tourne et que l'onglet est visible. Le PC ne se met plus en veille pendant une session.
+- Statistiques de session dans l'onglet Bilan (clé `pokebot.stats`) : captures, chromatiques, réussite de chaque Ball, raids, Œufs, roue.
+- Groupes Œuf lus dans le bundle du jeu (ils ne sont pas dans IndexedDB).
+
+### Corrigé
+
+- Raids : la capture (« {name} est capturé ! ») et la fuite du boss n'étaient jamais détectées, car le libellé commence par un paramètre. Nouveau test ligne par ligne (`lineHas`).
+
 ## [1.5.1]
 
 ### Ajouté

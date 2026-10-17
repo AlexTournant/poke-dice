@@ -48,7 +48,7 @@ Lancer `npm test` avant toute PR : la CI le refait et bloque la fusion si ça é
 5. **Screens** — détection de l'écran courant (combat, rencontre, Centre, boutique…).
 6. **Policies** — une politique par écran : battle, items, encounter, center, catch, victory, area, shop, upgrades, zones, Versus, Raids.
 7. **Bot** — boucle `tick` pilotée par `MutationObserver`, verrou `busy`, garde-fous.
-8. **Modes** — `progression`, `pokedex` (captures / évolutions), `farm`, `versus`, `raid`.
+8. **Modes** — `progression`, `pokedex` (captures / évolutions), `farm`, `versus`, `raid`. Routines tous modes (6.12 : roue, Pension, revanche) et confort (6.13 : notifications, statistiques, planning).
 9. **UI** — barre ON/OFF + mode + 🔒 + ₽/h, panneau ⚙️ dans un Shadow DOM, menu Tampermonkey, raccourci Alt+B.
 
 Console : `window.PokeBot` expose `bot`, `CONFIG`, `setMode('farm')`, `journal`, `Engine`, etc.
@@ -61,7 +61,7 @@ En Node (`module.exports` présent, pas de `document`), seuls `buildData`, `Engi
 - **Libellés via i18n.** Un bouton se reconnaît par `Rt.re('ui.…')` / `Rt.t('ui.…')`, jamais par un libellé français en dur (le français n'est qu'un repli).
 - **Un écran = une politique.** Une nouvelle action se range dans la politique de l'écran concerné et `playBattle`/`playEncounter`/… ne font qu'appeler des sous-fonctions.
 - **Réglages joueur** : persistés dans `localStorage['pokebot.settings']` (`cfg`, `lock`, `mode`, `farmAreaId`, `running`). Toute nouvelle option doit aussi apparaître dans `PANEL` pour être réglable.
-- **Clés localStorage existantes** : `pokebot.settings`, `pokebot.bossFails`, `pokebot.dexStall`, `pokebot.activity`, `pokebot.ledger`, `pokebot.general`. Ne pas renommer une clé sans migration.
+- **Clés localStorage existantes** : `pokebot.settings`, `pokebot.bossFails`, `pokebot.dexStall`, `pokebot.activity`, `pokebot.ledger`, `pokebot.general`, `pokebot.stats`. Ne pas renommer une clé sans migration.
 - **Versionner** : toute modification du script incrémente `@version` (SemVer) et ajoute une section `## [X.Y.Z]` dans `CHANGELOG.md`. La CI le vérifie (`scripts/check-version.js --base`). Une version se publie par tag `vX.Y.Z` (workflow Release). Tampermonkey ne propose une mise à jour que si la version augmente (`@updateURL` / `@downloadURL` suivent `main`). Ne jamais changer `@name`, `@namespace` ni ces URL : les joueurs perdraient les mises à jour.
 - **Mots-clés de langue** : le bundle du jeu contient plusieurs langues (`LANGS`) ; le script choisit celle de `save.settings.lang`.
 

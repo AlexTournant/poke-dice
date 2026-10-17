@@ -419,3 +419,178 @@ test('combat de dresseur : nouveau Pokémon adverse qui contre le nôtre → on 
   assert.equal(P.voluntarySwitch(b), null, 'une seule décision par Pokémon adverse');
   P.mem.fightKind = null;
 });
+/* ── v1.6 : captures, Pension, événements, raids, confort ── */
+
+test('Appâts : achetés selon le stock du mode, jamais si le jeu les a coupés', () => {
+  P.setMode('pokedex', { persist: false });
+  const save = setup({ box: [['a', 16, 10]], team: ['a'], pokedex: [16, 10, 25], badges: 7, gold: 3000, inventory: { 'poke-ball': 40, 'ultra-ball': 10 } });
+  P.Rt.D.items.bait = { key: 'bait', name: 'bait', price: 150, inShop: true, shopBadges: 7, effect: { kind: 'bait', faces: [1, 1, 1, 2, 2, 3] } };
+  try {
+    const w = P.shopWishlist(save).find((x) => x.key === 'bait');
+    assert.equal(w?.qty, P.CONFIG.stock.bait, 'stock d’appâts du mode Pokédex');
+    P.Rt.D.config.itemSwitches = { bait: 'off' };
+    assert.ok(!P.shopWishlist(save).some((x) => x.key === 'bait'), 'objet coupé par le jeu');
+  } finally { delete P.Rt.D.items.bait; delete P.Rt.D.config.itemSwitches; }
+});
+
+test('Chance de capture : achetée d’office en mode Pokédex (captures) seulement', () => {
+  const save = setup({ box: [['a', 16, 10]], team: ['a'], pokedex: [16], gold: 5000 });
+  P.Rt.D.config.general = { access: 'all', luck: [{ chance: 10, cost: 1000 }], offline: [] };
+  try {
+    P.setMode('progression', { persist: false });
+    assert.ok(!P.generalWish(save).some((g) => g.key === 'luck'), 'Progression : réglage buy.luck (coupé)');
+    P.setMode('pokedex', { persist: false });
+    assert.ok(P.generalWish(save).some((g) => g.key === 'luck'), 'Pokédex : seconde chance quand la Ball rate');
+    P.setOption('pokedexLuck', false, { persist: false });
+    assert.ok(!P.generalWish(save).some((g) => g.key === 'luck'));
+  } finally { P.setOption('pokedexLuck', true, { persist: false }); delete P.Rt.D.config.general; }
+});
+
+test('Fossiles : espèce manquante → achat en boutique, ou zone où on le trouve', () => {
+  P.setMode('pokedex', { persist: false });
+  localStorage.removeItem('pokebot.dexStall');
+  // Tout est capturé sauf Raichu (26), qu'on n'obtient que par un fossile
+  const save = setup({ box: [['a', 16, 10]], team: ['a'], pokedex: [10, 16, 25, 104], badges: 4, gold: 3000, inventory: { 'poke-ball': 40, 'ultra-ball': 10 } });
+  P.Rt.D.items['old-amber'] = { key: 'old-amber', name: 'old-amber', price: 500, inShop: true, shopBadges: 0, effect: { kind: 'fossil', dex: 26, level: 20, hours: 24 } };
+  const cave = P.Rt.D.areas.cave;
+  cave.lootPool = [{ itemKey: 'old-amber', weight: 5 }];
+  save.areaProgress.cave = { cleared: true };
+  try {
+    assert.deepEqual(P.fossilTargets(save).map((f) => f.dex), [26]);
+    assert.ok(P.shopWishlist(save).some((w) => w.key === 'old-amber' && w.qty === 1 && w.family === 'fossil'), 'fossile en vente : acheté');
+    P.Rt.D.items['old-amber'].inShop = false;
+    assert.equal(P.desiredArea(save).id, 'cave', 'pas en vente : on va dans la zone qui le donne');
+    save.box.push({ id: 'f', dex: 26, level: 20, currentHp: 0, revivesAt: Date.now() + 1e6 });
+    assert.equal(P.fossilTargets(save).length, 0, 'fossile déjà en Boîte : plus rien à chercher');
+  } finally { delete P.Rt.D.items['old-amber']; delete cave.lootPool; }
+});
+
+test('Espèce visée : meilleure zone ouverte, puis l’objectif s’efface une fois capturée', () => {
+  P.setMode('progression', { persist: false });
+  const save = setup({ box: [['a', 16, 20]], team: ['a'], pokedex: [16], area: 'route1' });
+  P.setOption('catchTarget', 'Pikachu', { persist: false });
+  try {
+    assert.equal(P.catchTargetDex(save), 25);
+    assert.equal(P.desiredArea(save).id, 'forest', 'Pikachu n’apparaît qu’en forêt');
+    save.pokedex.push(25);
+    assert.equal(P.catchTargetDex(save), null);
+    assert.equal(P.CONFIG.catchTarget, '', 'objectif atteint : option effacée');
+  } finally { P.setOption('catchTarget', '', { persist: false }); }
+});
+
+test('Pension : compatibilité des groupes Œuf (port du jeu)', () => {
+  setup({ box: [['a', 16, 10]], team: ['a'], pokedex: [16] });
+  P.Rt.D.eggGroups = {
+    1: { g: ['Monster', 'Grass'] }, 4: { g: ['Monster', 'Dragon'] }, 10: { g: ['Bug'] }, 132: { g: ['Ditto'], s: 'N' },
+    150: { g: ['Undiscovered'], s: 'N', l: 1 }, 29: { g: ['Monster', 'Field'], s: 'F' }, 32: { g: ['Monster', 'Field'], s: 'M' }, 30: { g: ['Monster', 'Field'], s: 'F' },
+  };
+  assert.ok(P.canBreed(1, 4), 'groupe Monstre commun');
+  assert.ok(!P.canBreed(1, 10), 'aucun groupe commun');
+  assert.ok(P.canBreed(132, 10), 'Métamorph va avec tout le monde…');
+  assert.ok(!P.canBreed(132, 150), '…sauf les légendaires');
+  assert.ok(P.canBreed(29, 32), 'Nidoran ♀ + ♂');
+  assert.ok(!P.canBreed(29, 30), 'deux espèces femelles seulement');
+});
+
+test('Pension : dépose un couple de la Boîte, jamais l’équipe ni les meilleurs niveaux', () => {
+  P.setMode('progression', { persist: false });
+  P.setOption('centerMaxBox', 1, { persist: false });
+  try {
+    const save = setup({ box: [['t', 16, 30], ['big', 17, 40], ['b1', 10, 5], ['b2', 11, 6], ['c', 25, 4]], team: ['t'], pokedex: Array.from({ length: 25 }, (_, i) => i + 1) });
+    P.Rt.D.eggGroups = { 16: { g: ['Flying'] }, 17: { g: ['Flying'] }, 10: { g: ['Bug'] }, 11: { g: ['Bug'] }, 25: { g: ['Field', 'Fairy'] } };
+    P.Rt.D.config.dayCare = { unlockPokedex: 20, slots: 2 };
+    assert.equal(P.dayCarePick(save)?.id, 'b1', 'le plus bas niveau qui a un partenaire (Pikachu N.4 n’en a pas)');
+    save.dayCare = { residents: [{ inst: { id: 'b1', dex: 10, level: 5 } }], guests: [] };
+    save.box = save.box.filter((m) => m.id !== 'b1');
+    assert.equal(P.dayCarePick(save)?.id, 'b2', 'le partenaire compatible');
+    save.dayCare.residents.push({ inst: { id: 'b2', dex: 11, level: 6 } });
+    assert.equal(P.dayCarePick(save), null, 'couple formé : rien à faire');
+    save.dayCare.egg = { at: 1 };
+    P.mem.dayCareAt = Date.now();
+    assert.ok(P.dayCareDue(save), 'un Œuf attend : on y va même si on vient de passer');
+  } finally { P.setOption('centerMaxBox', 12, { persist: false }); delete P.Rt.D.config.dayCare; }
+});
+
+test('Événements : ouverts selon access / enabled et la zone de déblocage', () => {
+  const save = setup({ box: [['a', 16, 10]], team: ['a'], pokedex: [16] });
+  P.Rt.D.config.events = { wheel: { access: 'all', unlockAreaId: 'route1' }, rebattle: { access: 'off' }, raid: { enabled: true, unlockAreaId: 'forest' } };
+  try {
+    assert.ok(P.eventOpen('wheel', save), 'route 1 terminée');
+    assert.ok(!P.eventOpen('rebattle', save), 'access off');
+    assert.ok(!P.eventOpen('raid', save), 'forêt pas terminée');
+  } finally { delete P.Rt.D.config.events; }
+});
+
+test('Revanche du Conseil 4 : palier courant et équipe prête ou non', () => {
+  P.setMode('progression', { persist: false });
+  const save = setup({ box: [['a', 999, 60]], team: ['a'], pokedex: [999] });
+  P.Rt.D.regions.kanto.leagueAreaId = 'route1';
+  P.Rt.D.trainers.e1 = { id: 'e1', name: 'Olga', team: [{ dex: 16, level: 20 }] };
+  P.Rt.D.trainers.e2 = { id: 'e2', name: 'Peter', team: [{ dex: 999, level: 90 }] };
+  P.Rt.D.config.rebattleLineups = { kanto: { bronze: ['e1'], silver: ['e2'] } };
+  P.Rt.D.config.events = { rebattle: { access: 'all', tiers: [{ id: 'bronze', gold: 1, upgradeDelta: 1 }, { id: 'silver', gold: 1.5, upgradeDelta: 2 }] } };
+  P.setOption('rebattle', true, { persist: false });
+  try {
+    assert.equal(P.rebattleState(save).tier.id, 'bronze');
+    assert.ok(P.rebattleDue(save), 'Gros N.60 contre Roucool N.20 : prêt');
+    save.events = { rebattle: { kanto: { done: 1, step: 0 } } };
+    assert.equal(P.rebattleState(save).tier.id, 'silver');
+    assert.ok(!P.rebattleDue(save), 'Gros N.90 amélioré : pas prêt');
+    save.events.rebattle.kanto.done = 2;
+    assert.equal(P.rebattleState(save), null, 'tous les paliers terminés');
+  } finally { P.setOption('rebattle', false, { persist: false }); delete P.Rt.D.config.events; delete P.Rt.D.config.rebattleLineups; delete P.Rt.D.regions.kanto.leagueAreaId; }
+});
+
+test('Raids : estimation des chances et Pokémon à entraîner', () => {
+  const save = setup({ box: [['w', 7002, 30], ['f', 7001, 55], ['g', 7003, 55], ['n', 999, 55]], team: ['f'], pokedex: [999] });
+  addMon(7001, 'Feu', 'fire', 300); addMon(7002, 'Eau', 'water', 300); addMon(7003, 'Plante', 'grass', 300); addMon(7004, 'Boss', 'fire', 900);
+  P.Rt.D.config.events = { raid: { barHp: 2.2, bars: 3, teamCap: 50, level: 50 } };
+  try {
+    assert.equal(Math.round(P.raidBossHp(7004, 50)), Math.round(P.Rt.E.speciesAt(7004, 50).maxHp * 6.6));
+    assert.equal(P.raidOdds({ myValue: 100, friends: 1, alliesValue: 50 }), 250, 'un ami compte comme ton équipe');
+    const t = P.raidTrainee(save, 7004, 50);
+    assert.equal(t?.m.id, 'w', 'l’Eau N.30 est le meilleur contre du boss Feu à monter au N.50');
+  } finally { delete P.Rt.D.config.events; }
+});
+
+test('Planning : plages horaires, y compris à cheval sur minuit', () => {
+  const plan = '08:00-23:00=pokedex; 23:00-08:00=farm; n’importe quoi; 10-11=inconnu';
+  assert.equal(P.parseSchedule(plan).length, 2, 'lignes invalides ou mode inconnu ignorés');
+  const at = (h, m = 0) => P.scheduledMode(plan, new Date(2026, 0, 1, h, m));
+  assert.equal(at(9), 'pokedex');
+  assert.equal(at(23, 30), 'farm');
+  assert.equal(at(3), 'farm');
+  assert.equal(P.scheduledMode('', new Date()), null);
+});
+
+test('Statistiques : un lancer réussi est compté avec sa Ball', () => {
+  setup({ box: [['a', 16, 10]], team: ['a'], pokedex: [16] });
+  P.Stats.reset();
+  P.mem.throwPending = { at: Date.now(), ball: 'Super Ball', isNew: true, shiny: false, legendary: false, name: 'Pikachu' };
+  document.body.innerText = 'ui.catch.caught';
+  try { P.noteCatchResult(); } finally { document.body.innerText = ''; }
+  const d = P.Stats.data();
+  assert.deepEqual(d.throws['Super Ball'], { n: 1, ok: 1 });
+  assert.equal(d.caught, 1);
+  assert.equal(d.newSpecies, 1);
+  assert.equal(P.mem.throwPending, null);
+});
+
+test('Anti-veille : verrou pris au démarrage, rendu à l’arrêt', async () => {
+  const calls = [];
+  // Node ≥ 21 a un navigator en lecture seule : on le remplace le temps du test
+  const before = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { wakeLock: { request: async (t) => { calls.push(t); return { release: async () => calls.push('release'), addEventListener() {} }; } } } });
+  try {
+    P.setOption('keepAwake', true, { persist: false });
+    await P.WakeLock.on();
+    assert.deepEqual(calls, ['screen']);
+    await P.WakeLock.on();
+    assert.equal(calls.length, 1, 'un seul verrou à la fois');
+    await P.WakeLock.off();
+    assert.deepEqual(calls, ['screen', 'release']);
+    P.setOption('keepAwake', false, { persist: false });
+    await P.WakeLock.on();
+    assert.equal(calls.length, 2, 'option coupée : aucun verrou');
+  } finally { if (before) Object.defineProperty(globalThis, 'navigator', before); else delete globalThis.navigator; P.setOption('keepAwake', true, { persist: false }); }
+});
