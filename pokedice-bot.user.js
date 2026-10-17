@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pokédice Autopilot
 // @namespace    pokedice-bot
-// @version      1.7.5
+// @version      1.7.6
 // @description  Joue à Pokédice — modes Progression / Pokédex / Farm / Versus / Raids : combats optimisés, soins, captures, boutique, améliorations, Centre, zones.
 // @match        https://poke-dice.netlify.app/*
 // @grant        none
@@ -3130,13 +3130,21 @@
     const out = [];
     const maxHp = Math.max(1, ...teamMons(save).map((m) => m.maxHp || 0));
     const reserved = new Set(itemEvolutions(save).map((t) => t.item));
+    // Jamais revendre ce que la boutique veut acheter : revendu ½ prix puis racheté plein pouvoir = argent perdu
+    const wanted = new Set(shopWishlist(save).map((w) => w.key));
+    // Soin « dépassé » seulement s'il est plus faible que le palier qu'on achète aujourd'hui. Avant la v1.7.6, en fin
+    // de partie (Pokémon N.100) l'Hyper Potion passait sous 20 % des PV max : revendue, puis rachetée car c'était le
+    // meilleur soin en vente, à chaque passage en boutique.
+    const heals = shopTiers('heal', 'amount', save);
+    const buyTier = heals.length ? heals[healTierFor(save, heals).idx].effect.amount ?? 0 : 0;
     for (const [key, n] of Object.entries(have)) {
       const it = Rt.D.items[key];
-      if (!n || !it?.price || it.unique) continue;
+      if (!n || !it?.price || it.unique || wanted.has(key)) continue;
       const fam = familyOf(key);
       let keep = Infinity;
       if (['heal', 'ball', 'cure', 'ether'].includes(fam) && n > CONFIG.sellAbove) keep = Math.floor(CONFIG.sellAbove / 2);
-      if (fam === 'heal' && CONFIG.sellObsoleteHeals && (it.effect?.amount ?? Infinity) < maxHp * 0.2) keep = Math.min(keep, 2);
+      const amount = it.effect?.amount ?? Infinity;
+      if (fam === 'heal' && CONFIG.sellObsoleteHeals && amount < maxHp * 0.2 && amount < buyTier) keep = Math.min(keep, 2);
       if (fam === 'stone' && CONFIG.sellDeadStones && !reserved.has(key) && !anyUseFor(key, save)) keep = 0;
       if (n > keep) out.push({ key, qty: n - keep, family: fam });
     }

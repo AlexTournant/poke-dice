@@ -6,6 +6,12 @@ Chaque section `## [X.Y.Z]` correspond à un tag `vX.Y.Z`. Les notes de la relea
 
 ## [Non publié]
 
+## [1.7.6]
+
+### Corrigé
+
+- Boutique : en fin de partie, le bot revendait ses Hyper Potions puis les rachetait, à chaque passage. La règle « soins devenus trop faibles » (moins de 20 % des PV max de l'équipe) visait l'Hyper Potion face à des Pokémon N.100, alors qu'elle restait le meilleur soin en vente : revendue à moitié prix, rachetée au prix fort. Un soin n'est plus considéré dépassé que s'il est plus faible que le palier acheté, et rien de ce que la boutique veut acheter n'est revendu.
+
 ## [1.7.5]
 
 ### Corrigé
