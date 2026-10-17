@@ -6,6 +6,12 @@ Chaque section `## [X.Y.Z]` correspond à un tag `vX.Y.Z`. Les notes de la relea
 
 ## [Non publié]
 
+## [1.11.2]
+
+### Corrigé
+
+- Choix du partenaire : la région se reconnaît par le nom en fin de titre (« … à Johto »), en ignorant les régions sans nom. À défaut, le bot prend la nouvelle région ouverte. Avant, une région sans nom dans les données « correspondait » à tous les titres, et le bot acceptait alors le premier starter proposé.
+
 ## [1.11.1]
 
 ### Corrigé

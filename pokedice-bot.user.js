@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pokédice Autopilot
 // @namespace    pokedice-bot
-// @version      1.11.1
+// @version      1.11.2
 // @description  Joue à Pokédice — modes Progression / Pokédex / Farm / Versus / Raids : combats optimisés, soins, captures, boutique, améliorations, Centre, zones.
 // @match        https://poke-dice.netlify.app/*
 // @grant        none
@@ -3951,7 +3951,8 @@
   /** Écran « Choisis ton partenaire » : la Poké Ball du starter voulu, « Choisir », puis « C'est parti ! ». */
   async function playPartner(d) {
     const label = norm(d.getAttribute('aria-label'));
-    const reg = mem.regionGo ?? regionsSorted().find((r) => label.includes(norm(r.name))) ?? null;
+    // Région : celle du départ en cours, sinon celle dont le nom est dans le titre (« … à Johto »), sinon la nouvelle région ouverte
+    const reg = mem.regionGo ?? regionsSorted().find((r) => r.name && label.endsWith(norm(r.name))) ?? newRegionOpen() ?? null;
     const go = btn('ui.partner.go', { scope: d });
     if (go) {
       log(`🎉 nouvelle région : ${reg?.name ?? ''} — partenaire choisi`);
