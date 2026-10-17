@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pokédice Autopilot
 // @namespace    pokedice-bot
-// @version      1.7.1
+// @version      1.7.2
 // @description  Joue à Pokédice — modes Progression / Pokédex / Farm / Versus / Raids : combats optimisés, soins, captures, boutique, améliorations, Centre, zones.
 // @match        https://poke-dice.netlify.app/*
 // @grant        none
@@ -139,7 +139,7 @@
 
     // Capture : chance exacte = (7 − (difficulté − bonus Ball)) / 6, difficulté 1–9 par espèce
     // Nouvelle espèce, règle du seuil : si même la meilleure Ball reste sous le seuil, on lance la meilleure ; sinon la moins chère au-dessus
-    catchNewPct: 80,              // nouvelle espèce : seuil (100 = toujours la meilleure chance)
+    catchNewPct: 100,             // nouvelle espèce : seuil — 100 (défaut) = toujours la meilleure chance, quitte à payer une Hyper Ball
     catchKnown: 'cheap',          // espèce déjà au Pokédex : 'cheap' (Ball la moins chère), 'normal' (règle du seuil catchMinPct), 'free' (Sans Ball)
     catchMinPct: 80,              // 'normal' : seuil pour les espèces déjà capturées
     catchRarePct: 95,             // chromatique ou légendaire : la meilleure chance possible
@@ -149,6 +149,7 @@
     xpTrainees: true,             // au Centre : le plus fort porte l'équipe, les autres places vont à des élèves de la Boîte
     carrierSafeScore: 1.6,        // ↳ duel moyen du porteur contre la zone sous lequel on garde 2 porteurs (1 seul élève)
     xpLead: true,                 // meneur choisi pour l'XP utile (pas d'XP perdue au niveau max), parmi les duels sans risque
+    dexCatchInsteadPct: 5,        // Pokédex : captures — une évolution manquante qui apparaît en sauvage à ≥ N % d'une zone ouverte se capture plutôt que s'entraîner
     dexFocus: 'catch',            // mode Pokédex : 'catch' (espèces sauvages jamais capturées) ou 'evo' (évolutions manquantes)
     // Activités (modes Versus / Raids) : le bot y va quand c'est ouvert, sinon il joue dans le mode de repli
     activity: null,
@@ -1531,6 +1532,43 @@
     return best?.a ?? null;
   }
 
+  const catchOnlyDex = () => CONFIG.mode === 'pokedex' && CONFIG.dexFocus === 'catch';
+  /** Plus grande part des rencontres sauvages d'une zone ouverte (région courante) où apparaît cette espèce (0 à 1). */
+  function wildShare(dex, save = readSave()) {
+    const region = regionId(save);
+    let best = 0;
+    for (const a of Rt.D.areaList) {
+      if (a.regionId !== region || !isUnlocked(a, save)) continue;
+      const pool = (a.wildPool ?? []).filter((w) => (w.weight ?? 1) > 0);
+      const total = pool.reduce((n, w) => n + (w.weight ?? 1), 0);
+      if (total) best = Math.max(best, pool.filter((w) => w.dex === dex).reduce((n, w) => n + (w.weight ?? 1), 0) / total);
+    }
+    return best;
+  }
+  /**
+   * Mode « Pokédex : captures » : faire évoluer un Pokémon ne sert que si son évolution DIRECTE manque au Pokédex
+   * (Minidraco → Draco déjà recensé : inutile, même si Dracolosse manque) et qu'on ne peut pas simplement la capturer :
+   * une espèce qui apparaît en sauvage à ≥ dexCatchInsteadPct % d'une zone ouverte se capture.
+   */
+  function dexWorthEvolving(toDex, save = readSave()) {
+    return !obtainedDex(save).has(toDex) && wildShare(toDex, save) * 100 < CONFIG.dexCatchInsteadPct;
+  }
+  /** Évolutions directes par niveau qui apportent une espèce au Pokédex (mode captures). */
+  function dexUsefulEvolutions(save = readSave()) {
+    const region = regionId(save);
+    const out = [];
+    for (const m of [...teamMons(save), ...boxMons(save)]) {
+      if (!m.stats || m.fossil) continue;
+      for (const e of evosOf(m.dex, region)) {
+        if (e.level == null || !inRegionDex(e.toDex, region) || !dexWorthEvolving(e.toDex, save)) continue;
+        out.push({ mon: m, toDex: e.toDex, level: e.level, toGo: Math.max(0, e.level - m.level) });
+      }
+    }
+    const best = new Map();
+    for (const t of out) if (!best.has(t.toDex) || t.toGo < best.get(t.toDex).toGo) best.set(t.toDex, t);
+    return [...best.values()].sort((a, b) => a.toGo - b.toGo);
+  }
+
   /* ── XP : Multi Exp, porteur et élèves ── */
   const maxLevel = () => Rt.D.config.maxLevel ?? 100;
   /** Multi Exp actif : config du jeu (multiExpShare > 0, mode "fighter") et réglage du joueur. */
@@ -1575,6 +1613,12 @@
     const pool = [...teamMons(save), ...boxMons(save)].filter((m) => m.stats && !m.fossil && m.level < max && !exclude.has(m.id));
     const out = [], taken = new Set();
     const take = (m, why) => { if (m && !taken.has(m.id) && out.length < n && pool.some((x) => x.id === m.id)) { taken.add(m.id); out.push({ m, why }); } };
+    // Mode Pokédex : captures → seuls les élèves dont l'évolution directe manque au Pokédex (et ne se capture pas) ;
+    // le reste de l'équipe reste fort : faire monter un Pokémon déjà recensé ne remplit pas le Pokédex
+    if (catchOnlyDex()) {
+      for (const t of dexUsefulEvolutions(save)) if (t.toGo > 0) take(pool.find((x) => x.id === t.mon.id), `évolution ${Rt.nameOf(t.toDex)} au N.${t.level} (absente du Pokédex)`);
+      return out;
+    }
     for (const t of evolutionTargets(save)) if (t.level != null && t.toGo > 0) take(pool.find((x) => x.id === t.mon.id), `évolution ${Rt.nameOf(t.toDex)} au N.${t.level}`);
     const vsLevel = 50;
     const n50 = (save?.box ?? []).filter((m) => m.level >= vsLevel).length;
@@ -1596,6 +1640,9 @@
     const carriers = raw.slice(0, nCarriers).map((x) => x.m);
     const kept = keep && !carriers.some((c) => c.id === keep.id) && carriers.length < size ? [keep] : [];
     const trainees = pickTrainees(save, size - carriers.length - kept.length, new Set([...carriers, ...kept].map((m) => m.id)));
+    // Pas assez d'élèves utiles (mode captures) : les places restantes vont aux meilleurs duels suivants
+    const used = new Set([...carriers, ...kept, ...trainees.map((t) => t.m)].map((m) => m.id));
+    for (const x of raw) { if (carriers.length + kept.length + trainees.length >= size) break; if (!used.has(x.m.id)) { carriers.push(x.m); used.add(x.m.id); } }
     return { carriers, kept, trainees };
   }
 
@@ -1732,8 +1779,8 @@
   /**
    * Choix de la Ball parmi les options affichées ({pct, price, bonus, master}) :
    *  - chromatique / légendaire / raid : la meilleure chance, au prix le plus bas pour cette chance ;
-   *  - nouvelle espèce, règle du seuil (catchNewPct, 80 %) : si même la meilleure Ball reste sous le seuil,
-   *    on lance la meilleure ; sinon la moins chère au-dessus ;
+   *  - nouvelle espèce : la meilleure chance (catchNewPct 100 par défaut ; plus bas = règle du seuil :
+   *    si même la meilleure Ball reste sous le seuil on la lance, sinon la moins chère au-dessus) ;
    *  - espèce déjà au Pokédex : catchKnown — la moins chère par défaut (la capture n'apporte rien au Pokédex),
    *    ou la même règle du seuil avec catchMinPct, ou Sans Ball.
    */
@@ -1758,6 +1805,40 @@
     return threshold(CONFIG.catchMinPct);
   }
 
+  /**
+   * Espèce affichée sur l'écran de capture (« Le Roucool est épuisé ! », « Roucool est toujours là ! »).
+   * C'est elle qui décide « nouvelle espèce » : la carte de rencontre ne montre pas toujours l'espèce, et avant la
+   * v1.7.2 une espèce non lue passait pour déjà capturée → Ball la moins chère, voire Sans Ball.
+   */
+  function catchScreenDex() {
+    for (const key of ['ui.catch.wornOut', 'ui.catch.again', 'ui.catch.stayed', 'ui.catch.baitAsk']) {
+      const name = captureParam(key, 'name');
+      const dex = name && (Rt.dexOf(name) ?? Rt.dexOf(name.replace(/^\S+\s+/, '')));
+      if (dex) return dex;
+    }
+    return null;
+  }
+  /** Valeur du paramètre {param} d'un libellé i18n affiché à l'écran (ligne par ligne), ou null. */
+  function captureParam(key, param) {
+    const tpl = norm(Rt.t(key));
+    if (!tpl.includes('{')) return null;
+    const parts = tpl.split(/(\{[^}]+\})/);
+    let group = 0, idx = 0;
+    const src = parts.map((x) => { if (!/^\{/.test(x)) return esc(x); group++; if (x === `{${param.toUpperCase()}}` || x === `{${param}}`) idx = group; return '(.+?)'; }).join('');
+    if (!idx) return null;
+    const re = new RegExp('^' + src + '$');
+    for (const line of (document.body.innerText ?? '').split(/\r?\n/)) { const m = norm(line).match(re); if (m) return m[idx].trim(); }
+    return null;
+  }
+  /** Objet derrière une option de Ball : nom traduit (i18n) puis nom des données du jeu, le plus long qui correspond. */
+  function ballItemOf(label) {
+    let best = null;
+    const consider = (name, key) => { if (name && label.startsWith(name) && (!best || name.length > best.name.length)) best = { name, key }; };
+    for (const [n, k] of Rt.itemNameToKey) consider(n, k);
+    for (const it of Object.values(Rt.D.items)) if (it.effect?.kind === 'ball') consider(norm(it.name), it.key);
+    return best ? Rt.D.items[best.key] ?? null : null;
+  }
+
   async function playCatch() {
     const ballRe = Rt.re('ui.catch.ballLabel');
     const opts = $$('button, [role=radio]').filter((x) => visible(x) && enabled(x)).map((el) => {
@@ -1766,15 +1847,20 @@
       return ballRe.test(t) && Number.isFinite(pct) ? { el, t, pct } : null;
     }).filter(Boolean);
     const legendary = bodyHas('ui.catch.theLegendary');
+    // Nouvelle espèce ? On regarde l'espèce affichée ici, puis (repli) ce qu'a noté l'écran de rencontre
+    const dex = catchScreenDex() ?? mem.rare?.dex ?? null;
+    if (dex && !mem.rare?.why?.match(/chromatique|raid|légendaire/) && !obtainedDex(readSave()).has(dex)) mem.rare = { dex, why: 'nouvelle espèce' };
     const rare = legendary || !!mem.rare;
     let picked = null;
     if (opts.length) {
-      // Objet derrière chaque option ("Sans Ball" → aucun, prix 0)
-      const itemOf = (o) => { const k = [...Rt.itemNameToKey.entries()].find(([n]) => o.t.startsWith(n))?.[1]; return k ? Rt.D.items[k] : null; };
-      for (const o of opts) { const it = itemOf(o); o.price = it?.price ?? 0; o.bonus = it?.effect?.bonus ?? 0; o.master = (it?.effect?.bonus ?? 0) >= 10; }
+      for (const o of opts) { const it = ballItemOf(o.t); o.price = it?.price ?? 0; o.bonus = it?.effect?.bonus ?? 0; o.master = (it?.effect?.bonus ?? 0) >= 10 || /MASTER/.test(o.t); }
       const pick = chooseBall(opts, { legendary, rare, why: mem.rare?.why });
       if (pick && pick.el.getAttribute('aria-pressed') !== 'true' && pick.el.getAttribute('aria-checked') !== 'true') { pick.el.click(); await sleep(250); }
-      log(`🎯 capture${rare ? ' (' + (legendary ? 'légendaire' : mem.rare.why) + ')' : ''} : ${pick.t}`);
+      const sig = `${dex}|${pick.t}`;
+      if (mem.catchLog !== sig) {
+        mem.catchLog = sig;
+        log(`🎯 capture ${dex ? Rt.nameOf(dex) : '?'}${rare ? ' (' + (legendary ? 'légendaire' : mem.rare.why) + ')' : ' (déjà au Pokédex)'} : ${pick.t.split(':')[0].trim()} ${pick.pct} % — options : ${opts.map((o) => `${o.t.split(':')[0].replace(/,.*$/, '').trim()} ${o.pct} %`).join(', ')}`);
+      }
       picked = pick.t.split(':')[0].trim();
     }
     const bait = btn(rare ? 'ui.catch.baitThrow' : 'ui.catch.baitKeep');
@@ -2277,44 +2363,60 @@
   async function ensureRaidTeam(r) {
     if (r.teamDone || !CONFIG.raidAutoTeam) return false;
     const d = dialog();
-    const saveBtn = d && btn('ui.raid.teamSave', { scope: d });
-    if (saveBtn) {
-      const picks = $$('button[aria-pressed]', d).filter((x) => visible(x) && x.querySelector('b'));
-      const keyOf = (x) => norm(x.textContent);
+    // Fenêtre « Modifier » : liste de candidats (bouton aria-pressed avec nom en gras et niveau) + Enregistrer.
+    // Enregistrer est DÉSACTIVÉ tant que l'équipe est vide : on reconnaît la fenêtre sans exiger qu'il soit actif
+    // (avant la v1.7.2, vider l'équipe pour la refaire rendait la fenêtre méconnaissable → boucle sur « Modifier »).
+    const saveRe = Rt.re('ui.raid.teamSave');
+    const saveBtn = d && $$('button', d).find((x) => visible(x) && saveRe.test(norm(x.innerText)));
+    const picks = d ? $$('li button[aria-pressed]', d).filter((x) => visible(x) && x.querySelector('b') && x.querySelector('small')) : [];
+    if (saveBtn && picks.length) {
+      // Clé d'un candidat : nom + niveau (sans le numéro de place affiché quand il est choisi)
+      const keyOf = (x) => `${norm(x.querySelector('b').innerText)}|${norm(x.querySelector('small').innerText)}`;
       if (!r.teamPlan) {
+        if (!r.dex) { const n = captureParam('ui.raid.recommendedNote', 'name'); r.dex = n ? Rt.dexOf(n) : null; }
         if (!r.dex) { log('⚠️ Raid : boss inconnu, équipe de raid laissée telle quelle'); r.teamDone = true; closeDialog(); return true; }
         const bossLevel = r.bossLevel ?? raidCfg()?.level ?? 50;
+        const seen = new Set();
         const scored = picks.map((x) => {
-          const dex = Rt.dexOf(x.querySelector('b').textContent);
-          const lvl = +(norm(x.textContent).match(/N\.\s*(\d+)/)?.[1] ?? 1);
-          return { key: keyOf(x), name: x.querySelector('b').textContent, v: dex ? raidValue(dex, lvl, r.dex, bossLevel) : 0 };
-        }).sort((a, b) => b.v - a.v).slice(0, 3);
+          const dex = Rt.dexOf(x.querySelector('b').innerText);
+          const lvl = +(norm(x.querySelector('small').innerText).match(/(\d+)/)?.[1] ?? 1);
+          return { key: keyOf(x), name: x.querySelector('b').innerText.trim(), lvl, v: dex ? raidValue(dex, lvl, r.dex, bossLevel) : 0 };
+        }).filter((x) => !seen.has(x.key) && seen.add(x.key)).sort((a, b) => b.v - a.v).slice(0, 3);
+        if (!scored.length) { log('⚠️ Raid : aucun Pokémon proposé pour l’équipe de raid'); r.teamDone = true; closeDialog(); return true; }
         r.teamPlan = scored.map((x) => x.key);
-        r.teamNames = scored.map((x) => x.name);
+        r.teamNames = scored.map((x) => `${x.name} N.${x.lvl}`);
         r.myValue = scored.reduce((n, x) => n + x.v, 0);
-        r.rebuild = true;
       }
-      const pressed = picks.filter((x) => x.getAttribute('aria-pressed') === 'true');
-      // On repart de zéro une fois (pour que l'ordre soit le bon : le meilleur mène)
-      if (r.rebuild && pressed.length) { pressed[0].click(); return true; }
-      r.rebuild = false;
-      const have = pressed.map(keyOf);
-      // prochain Pokémon du plan pas encore choisi (les doublons d'espèce/niveau sont comptés)
-      const left = [...have];
-      const next = r.teamPlan.find((k) => { const i = left.indexOf(k); if (i >= 0) { left.splice(i, 1); return false; } return true; });
-      if (next && have.length < 3) {
+      // Ordre voulu : le meilleur mène. Les boutons choisis portent leur numéro de place (1, 2, 3).
+      const slot = (x) => +(x.querySelector('span.light-scope, span:last-child')?.innerText.trim() || 0);
+      const chosen = picks.filter((x) => x.getAttribute('aria-pressed') === 'true').sort((a, b) => slot(a) - slot(b)).map(keyOf);
+      const prefixOk = chosen.every((k, i) => k === r.teamPlan[i]);
+      if (!prefixOk) {
+        // Mauvais ordre ou mauvais Pokémon : on vide d'un coup (« Effacer »), puis on choisit dans l'ordre
+        const clear = btn('ui.versus.clear', { scope: d });
+        if (clear) { clear.click(); return true; }
+        const first = picks.find((x) => x.getAttribute('aria-pressed') === 'true');
+        if (first) { first.click(); return true; }
+      }
+      const next = r.teamPlan[chosen.length];
+      if (prefixOk && next && chosen.length < 3) {
         const b = picks.find((x) => x.getAttribute('aria-pressed') !== 'true' && keyOf(x) === next);
         if (b) { b.click(); return true; }
+        log(`⚠️ Raid : ${next.split('|')[0]} introuvable dans la liste, on garde ${chosen.length} Pokémon`);
+        r.teamPlan = r.teamPlan.slice(0, chosen.length);
       }
+      if (!enabled(saveBtn)) { closeDialog(); r.teamDone = true; return true; }
       r.teamDone = true;
       saveBtn.click();
       log(`🐉 Raid : équipe ${r.teamNames.join(' → ')} contre ${Rt.nameOf(r.dex)}`);
       return true;
     }
+    if (d) return false; // une autre fenêtre (alliés, amis…) : on la laisse aux autres étapes
     const sec = document.querySelector('section[aria-labelledby="raid-team-h"]');
     if (!sec) return false;
     const edit = btn('ui.raid.teamEdit', { scope: sec });
-    if (edit) { edit.click(); return true; }
+    if (edit && (r.editTries = (r.editTries ?? 0) + 1) <= 3) { edit.click(); return true; }
+    if (edit) log('⚠️ Raid : la fenêtre de l’équipe ne s’ouvre pas, on garde l’équipe actuelle');
     r.teamDone = true;
     return false;
   }
@@ -2346,6 +2448,7 @@
     const path = location.pathname;
     const r = mem.raid ?? (mem.raid = { key: path.startsWith('/raid/') ? path.split('/').slice(2).join('/') : 'daily', dex: +path.split('/')[3] || null, idle: 0 });
     // Raid du jour : l'espèce se lit sur la page (premier nom de Pokémon affiché)
+    if (!r.dex) { const n = captureParam('ui.raid.recommendedNote', 'name') ?? captureParam('ui.raid.heading', 'name'); r.dex = n ? Rt.dexOf(n) : null; }
     if (!r.dex) for (const line of (document.querySelector('main')?.innerText ?? '').split('\n')) { const d = Rt.dexOf(line.trim()) ?? Rt.dexOf(line.replace(/^.*?:\s*/, '').trim()); if (d) { r.dex = d; break; } }
     // Intro du raid : GO !
     const goBtn = btn(['ui.raid.intro.go', 'ui.raid.intro.skip']);
@@ -2375,7 +2478,7 @@
         const label = x.getAttribute('aria-label');
         const level = +(label.match(/N\.\s*(\d+)\s*$/)?.[1] ?? label.match(/(\d+)\s*$/)?.[1] ?? bossLevel);
         const teamTxt = label.split(':').slice(1).join(':').replace(/,\s*N\.\s*\d+.*$/, '');
-        const dexes = teamTxt.split(',').map((n) => Rt.dexOf(n.trim())).filter(Boolean);
+        const dexes = teamTxt.split(/,\s*/).map((n) => Rt.dexOf(n.trim())).filter(Boolean);
         return { x, name: label.split(':')[0].trim(), s: r.dex ? raidTeamValue(dexes, level, r.dex, bossLevel) : dexes.length };
       }).sort((a, b) => b.s - a.s);
       if (scored[0]) { r.alliesValue = (r.alliesValue ?? 0) + (r.dex ? scored[0].s : 0); log(`🤝 Raid : allié ${scored[0].name} (≈ ${Math.round(scored[0].s)} dégâts au boss)`); scored[0].x.click(); return true; }
@@ -2670,7 +2773,7 @@
   /* ── 6.10 Évolutions par objet : Équipe → fiche du Pokémon → UTILISER UN OBJET → la Pierre ── */
   function startItemEvolution(save) {
     mem.evolveTried ??= new Set();
-    const t = itemEvolutions(save).find((x) => x.owned > 0 && !mem.evolveTried.has(`${x.mon.id}>${x.toDex}`));
+    const t = itemEvolutions(save).find((x) => x.owned > 0 && !mem.evolveTried.has(`${x.mon.id}>${x.toDex}`) && (!catchOnlyDex() || dexWorthEvolving(x.toDex, save)));
     if (!t) return false;
     mem.evolve = { ...t, steps: 0 };
     log(`💎 évolution par objet : ${t.mon.name} N.${t.mon.level} + ${Rt.t('item.' + t.item, t.item)} → ${Rt.nameOf(t.toDex)}`);
@@ -3653,10 +3756,11 @@
     { tab: 'Captures', icon: '🎯', groups: [
       { title: 'Choix de la Ball (chance exacte : dé 1–6 + bonus ≥ difficulté)', fields: [
         { p: 'catchTarget', t: 'text', l: 'Espèce visée (nom affiché en jeu, vide = aucune)', h: 'Le bot va dans la zone ouverte où elle apparaît le plus et la capture avec la meilleure Ball. L’objectif s’efface une fois l’espèce au Pokédex.' },
-        { p: 'catchNewPct', t: 'num', l: 'Nouvelle espèce : seuil (%)', min: 30, max: 100, step: 5, h: 'Sous ce seuil, même la meilleure Ball : on la lance. Au-dessus : la moins chère qui le dépasse. 100 = toujours la meilleure.' },
+        { p: 'catchNewPct', t: 'num', l: 'Nouvelle espèce : seuil (%) — 100 = meilleure chance', min: 30, max: 100, step: 5, h: '100 (défaut) : toujours la Ball qui a la meilleure chance. Plus bas : sous ce seuil la meilleure Ball, au-dessus la moins chère qui le dépasse.' },
         { p: 'catchKnown', t: 'sel', l: 'Espèce déjà capturée', o: [['cheap', 'Ball la moins chère'], ['normal', 'règle du seuil ci-dessous'], ['free', 'Sans Ball (gratuit)']] },
         { p: 'catchMinPct', t: 'num', l: '↳ seuil (%)', min: 0, max: 100, step: 5 },
         { p: 'pokedexFleeKnownMargin', t: 'num', l: 'Pokédex : fuit les espèces connues si l’équipe dépasse la zone de +N niv.', min: 0, max: 30 },
+        { p: 'dexCatchInsteadPct', t: 'num', l: 'Pokédex : captures — évolution manquante à capturer plutôt qu’entraîner si elle apparaît à ≥ N %', min: 0, max: 100, step: 1, h: 'Une espèce absente qu’on peut rencontrer en sauvage à au moins N % d’une zone ouverte se capture ; en dessous (rare ou introuvable), le bot fait évoluer le Pokémon qui la donne.' },
         { p: 'pokedexStallEncounters', t: 'num', l: 'Pokédex : quitte une zone après N rencontres sans nouvelle espèce', min: 10, max: 500, step: 10 },
         { p: 'pokedexStallMinutes', t: 'num', l: '↳ et n’y revient pas avant N minutes', min: 0, max: 600, step: 5 },
       ] },
@@ -4005,7 +4109,7 @@
   }
 
   const api = { itemEvolutions, evolutionTargets, healTierFor, shopTiers, bot, CONFIG, MODES, DEFAULTS, setMode, setOption, resetOptions, setTeamLock, bossMatchup, bossTeam, journal, Rt, mem, readBattle, teamMons, boxMons,
-    upgradeCandidates, comboGains, upgradePick, xpShare, usefulXp, pickTrainees, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, nextRaid, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
+    upgradeCandidates, comboGains, catchScreenDex, captureParam, ballItemOf, upgradePick, xpShare, usefulXp, pickTrainees, catchOnlyDex, wildShare, dexWorthEvolving, dexUsefulEvolutions, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, ensureRaidTeam, nextRaid, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
     areaThreats, missingSpecies, desiredArea, buildData, Engine,
     obtainedDex, fossilTargets, catchTargetDex, targetArea, wantLuck, canBreed, dayCarePick, dayCareDue, eventOpen, rebattleState, rebattleMatchup, rebattleDue,
     raidBossHp, raidOdds, raidTrainee, parseSchedule, scheduledMode, Stats, noteCatchResult, notify, WakeLock };
