@@ -932,3 +932,52 @@ test('Capture : toutes les options de Ball sont reconnues, pas seulement les « 
     assert.equal(P.mem.rare?.why, 'nouvelle espèce');
   } finally { P.Rt.i18n.clear(); P.Rt.frNameToDex.clear(); P.mem.rare = null; P.mem.fightKind = null; P.mem.throwPending = null; P.setMode('progression', { persist: false }); }
 });
+
+/** Combat simulé pour battleItems : un Sac qui note les ouvertures, des dés base. */
+function fakeFight({ faces, meHp, meMax = 100, foeHp, foeExp = 60, rerolls = 0, raid = false }) {
+  const bag = fakeEl({ innerText: 'SAC' });
+  const dice = faces.map((v, i) => ({ el: fakeEl(), type: 'base', face: { kind: 'number', value: v }, label: `Dé, ${v}#${i}`, selected: false }));
+  const ctx = {
+    attackerTypes: ['normal'], defTypes: ['normal'], levels: { comboLevels: {}, dieLevels: {} },
+    foe: { name: 'Foe', dex: 16, hp: foeHp, maxHp: 200, expDmg: foeExp, stats: null },
+    me: { name: 'Moi', dex: 999, hp: meHp, maxHp: meMax, expDmg: 10, stats: null },
+  };
+  return { b: { raid, dice, ctx, shownDmg: NaN, rerollsLeft: rerolls, bagBtn: bag, rerollBtn: null }, bag };
+}
+
+test('Soins : pas de potion quand l’attaque tue déjà, même sans dégâts affichés', async () => {
+  P.setMode('progression', { persist: false });
+  setup({ box: [['a', 999, 30]], team: ['a'], pokedex: [999], inventory: { potion: 5 } });
+  P.mem.itemTurn = null; P.mem.cureTurn = null; P.mem.fightKind = 'trainer';
+  // 6+6+6 = 18 (+ brelan) ≥ 10 PV adverses ; nous à 5 PV face à une menace de 60 : avant la v1.7.5, potion
+  const kill = fakeFight({ faces: [6, 6, 6], meHp: 5, foeHp: 10 });
+  assert.equal(await P.battleItems(kill.b), false);
+  assert.equal(kill.bag.clicks, 0, 'aucune potion : l’attaque finit l’adversaire');
+  P.mem.fightKind = null;
+});
+
+test('Soins : en raid, aucun objet (copies du raid) sauf réglage', async () => {
+  setup({ box: [['a', 999, 30]], team: ['a'], pokedex: [999], inventory: { potion: 5 } });
+  P.mem.itemTurn = null; P.mem.fightKind = 'raid';
+  const f = fakeFight({ faces: [1, 2, 3], meHp: 5, foeHp: 900, raid: true });
+  assert.equal(await P.battleItems(f.b), false);
+  assert.equal(f.bag.clicks, 0, 'pas de potion en raid');
+  P.mem.fightKind = null;
+});
+
+test('Capture : l’écran « Presque ! Lancer un Appât ? » est traité (plus de blocage)', async () => {
+  P.setMode('pokedex', { persist: false });
+  setup({ box: [['a', 16, 10]], team: ['a'], pokedex: [16] });
+  for (const [k, v] of [['ui.catch.baitThrow', 'Lancer l’Appât ×{n}'], ['ui.catch.baitKeep', 'Le garder'], ['ui.catch.baitAsk', 'Presque ! Lancer un Appât pour attirer {name} ?']]) P.Rt.i18n.set(k, v);
+  P.Rt.frNameToDex.set('PIKACHU', 25);
+  const keep = fakeEl({ innerText: 'Le garder' }), thr = fakeEl({ innerText: 'Lancer l’Appât ×2' });
+  P.mem.rare = null; P.mem.fightKind = 'wild'; P.mem.raid = null;
+  try {
+    await withScreen({ buttons: [keep, thr], body: 'Presque ! Lancer un Appât pour attirer Pikachu ?' }, async () => {
+      assert.ok(P.Rt.re('ui.catch.baitThrow').test('LANCER L’APPÂT ×2'));
+      assert.ok(await P.playCatch());
+    });
+    assert.equal(thr.clicks, 1, 'nouvelle espèce (Pikachu lu à l’écran) : l’appât est lancé');
+    assert.equal(keep.clicks, 0);
+  } finally { P.Rt.i18n.clear(); P.Rt.frNameToDex.clear(); P.mem.rare = null; P.mem.fightKind = null; P.setMode('progression', { persist: false }); }
+});
