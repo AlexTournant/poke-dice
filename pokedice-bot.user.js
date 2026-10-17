@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pokédice Autopilot
 // @namespace    pokedice-bot
-// @version      1.8.0
+// @version      1.9.0
 // @description  Joue à Pokédice — modes Progression / Pokédex / Farm / Versus / Raids : combats optimisés, soins, captures, boutique, améliorations, Centre, zones.
 // @match        https://poke-dice.netlify.app/*
 // @grant        none
@@ -145,6 +145,8 @@
     catchMinPct: 80,              // 'normal' : seuil pour les espèces déjà capturées
     catchRarePct: 95,             // chromatique ou légendaire : la meilleure chance possible
     catchTarget: '',              // espèce visée (nom affiché par le jeu) : le bot va dans la meilleure zone pour elle et la capture
+    autoRegion: true,             // Progression, Farm, Pokédex : captures — passe à la région suivante une fois la Ligue battue (et la région finie)
+    starterPick: {},              // partenaire par région : { johto: 155, … } ; absent = le meilleur potentiel
     farmGoal: 'xp',               // mode Farm : 'xp' (zone choisie), 'xpAuto' (zone qui rapporte le plus d'XP sans risque) ou 'gold'
     // XP : porteur + élèves (Multi Exp du jeu : un Pokémon ≥ 14 niveaux sous le combattant reçoit 100 % de l'XP sans combattre)
     xpTrainees: true,             // au Centre : le plus fort porte l'équipe, les autres places vont à des élèves de la Boîte
@@ -172,7 +174,7 @@
     raidTrain: true,              // …et on entraîne au Centre le meilleur « contre » du boss qui n'a pas le niveau plafond
     // Événements et routines (tous modes)
     eventWheel: true,             // Roue de la fortune : un tour gratuit par jour
-    rebattle: false,              // Revanche du Conseil 4 : enchaîne les paliers quand l'équipe est prête (5 combats sans Centre)
+    rebattle: true,               // Revanche du Conseil 4 : le Centre compose l'équipe qui bat tout le palier, puis enchaîne les 5 combats
     rebattleReadyScore: 1.4,      // ↳ duel moyen exigé contre les équipes du palier
     rebattleMaxTries: 3,          // ↳ défaites par jour avant d'attendre le lendemain
     dayCare: true,                // Pension : fait éclore les Œufs et y laisse un couple de la Boîte (Œufs : espèces absentes ×4)
@@ -1814,6 +1816,15 @@
       }
     }
 
+    // Revanche du Conseil 4 prête : l'équipe qui bat TOUT le palier (pas de Centre ni de changement d'équipe pendant)
+    const rbp = !prepBoss ? rebattlePlan(save) : null;
+    if (rbp) {
+      want.splice(0, want.length, ...rbp.team);
+      mem.xpTrainees = []; mem.trainee = null;
+      const sig = `${rbp.rb.tier.id}|${rbp.team.map((m) => m.id).join(',')}`;
+      if (mem.rbTeamLog !== sig) { mem.rbTeamLog = sig; log(`🏅 Revanche ${rbp.rb.tier.id} : équipe ${rbp.team.map((m) => `${m.name} N.${m.level}`).join(' + ')} (duel moyen ${rbp.avg.toFixed(2)}, pire ${rbp.worst.toFixed(2)} contre les ${rebattleThreats(rbp.rb).length} Pokémon du palier)`); }
+    }
+
     // 1) Faire entrer un Pokémon de la Boîte s'il est meilleur
     // Garde-fou : un Pokémon sorti il y a moins de 10 min ne revient pas, et au plus `size` échanges par passage
     // (sinon deux Pokémon pouvaient s'échanger sans fin, le calcul changeant à chaque échange)
@@ -2015,6 +2026,7 @@
     if (await errandTick(save)) return true;
     if (CONFIG.activity && (await activityTick())) return true;
     if (CONFIG.economy && (await chores(mem.forceChores))) { mem.forceChores = false; return true; }
+    if (await regionTick(save)) return true;
     if (CONFIG.autoTravel && (await travel())) return true;
     const cont = btn(['ui.home.backToEncounter', 'ui.common.continue', 'ui.area.explore', 'ui.home.keepExploring', 'ui.home.continueHere']);
     if (cont) { cont.click(); return true; }
@@ -3644,6 +3656,157 @@
     return true;
   }
 
+  /* ── 6.14 Revanche : équipe pour tout le palier · Régions : changement automatique et partenaire ── */
+  /**
+   * Pokémon des dresseurs restants du palier de revanche (5 combats d'affilée, sans Centre ni changement d'équipe),
+   * avec leurs améliorations (niveau du dresseur + upgradeDelta du palier, « max » = niveau maximum).
+   */
+  function rebattleThreats(rb) {
+    const maxUp = Math.max(1, ...Object.values(Rt.D.comboUp).map((l) => l.length));
+    const out = [];
+    for (const tr of rb.trainers.slice(rb.step)) for (const tm of tr.team ?? []) {
+      const base = tr.upgradeLevel ?? Rt.D.config.enemyUpgradeLevel ?? 1;
+      const up = rb.tier.upgradeDelta === 'max' ? maxUp : Math.min(maxUp, base + (+rb.tier.upgradeDelta || 0));
+      if (Rt.D.species[tm.dex]) out.push({ dex: tm.dex, level: tm.level ?? 50, levels: Rt.E.allLevels(up), trainer: tr.name });
+    }
+    return out;
+  }
+  /**
+   * Meilleure équipe de `size` Pokémon contre une liste de menaces : pour chaque menace, le meilleur duel de l'équipe
+   * (on peut changer de Pokémon en combat) ; on maximise le pire duel accepté puis la moyenne. Les 8 meilleurs
+   * candidats seuls sont combinés (56 équipes de 3) : rapide même avec une grosse Boîte.
+   * @returns {{team:object[], avg:number, worst:number}|null}
+   */
+  function bestTeamVs(cands, threats, size = Rt.D.config.maxTeamSize ?? 3) {
+    const mons = cands.filter((m) => m.stats);
+    if (!mons.length || !threats.length) return null;
+    const foes = threats.map((th) => ({ st: Rt.E.speciesAt(th.dex, th.level), levels: th.levels ?? Rt.E.allLevels(1) })).filter((f) => f.st);
+    const rows = mons.map((m) => foes.map((f) => Math.min(4, Rt.E.duelScore({ stats: m.stats, hp: m.maxHp, levels: m.levels }, { stats: f.st, hp: f.st.maxHp, levels: f.levels }).score)));
+    const mean = (r) => r.reduce((a, b) => a + b, 0) / (r.length || 1);
+    const idx = mons.map((_, i) => i).sort((a, b) => mean(rows[b]) - mean(rows[a])).slice(0, 8);
+    const k = Math.min(size, idx.length);
+    let best = null;
+    const pick = (start, chosen) => {
+      if (chosen.length === k) {
+        const per = foes.map((_, j) => Math.max(...chosen.map((i) => rows[i][j])));
+        const avg = mean(per), worst = Math.min(...per);
+        const key = (worst >= CONFIG.bossWorstScore ? 1000 : 0) + avg;
+        if (!best || key > best.key) best = { key, avg, worst, chosen: [...chosen] };
+        return;
+      }
+      for (let s = start; s < idx.length; s++) { chosen.push(idx[s]); pick(s + 1, chosen); chosen.pop(); }
+    };
+    pick(0, []);
+    if (!best) return null;
+    return { team: best.chosen.sort((a, b) => mean(rows[b]) - mean(rows[a])).map((i) => mons[i]), avg: best.avg, worst: best.worst };
+  }
+  /**
+   * Revanche prête à jouer : réglage actif, palier ouvert, et la meilleure équipe possible (parmi l'équipe ET la Boîte)
+   * atteint rebattleReadyScore sans Pokémon adverse sans réponse. Décision indépendante de l'équipe du moment.
+   */
+  function rebattlePlan(save = readSave()) {
+    if (!CONFIG.rebattle || !eventOpen('rebattle', save)) return null;
+    const rb = rebattleState(save);
+    if (!rb) return null;
+    const sig = `${rb.region}|${rb.tier.id}|${rb.step}|${save?.box?.length}|${(save?.box ?? []).reduce((n, m) => n + m.level, 0)}`;
+    if (mem.rbPlan?.sig !== sig) mem.rbPlan = { sig, plan: bestTeamVs(centerCandidates(save), rebattleThreats(rb)) };
+    const plan = mem.rbPlan.plan;
+    if (!plan || plan.avg < CONFIG.rebattleReadyScore || plan.worst < CONFIG.bossWorstScore) return null;
+    return { rb, ...plan };
+  }
+
+  /* Régions */
+  const regionsSorted = () => Object.values(Rt.D.regions).sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
+  const starterList = (reg) => (reg?.starters ?? []).filter((d) => Rt.D.species[d]);
+  /** Starter voulu pour une région : réglage starterPick, sinon le meilleur potentiel de sa dernière évolution. */
+  function starterFor(regionIdArg) {
+    const reg = Rt.D.regions[regionIdArg];
+    const list = starterList(reg);
+    const want = +(CONFIG.starterPick?.[regionIdArg] || 0);
+    if (list.includes(want)) return want;
+    const finalOf = (dex) => evoDescendants(dex, regionIdArg).filter((d) => d.level != null).map((d) => d.toDex).at(-1) ?? dex;
+    return [...list].sort((a, b) => potentialAtMax({ dex: finalOf(b) }) - potentialAtMax({ dex: finalOf(a) }))[0] ?? null;
+  }
+  /** Région suivante ouverte (Ligue de la région courante battue) et jamais jouée. */
+  function newRegionOpen(save = readSave()) {
+    const cur = Rt.D.regions[save?.region ?? regionId(save)];
+    const next = cur?.nextRegion && Rt.D.regions[cur.nextRegion];
+    if (!next || next.enabled === false) return null;
+    const league = cur.leagueAreaId && save?.areaProgress?.[cur.leagueAreaId];
+    if (!(league?.cleared || league?.bossDefeated)) return null;
+    if (save?.region === next.id || save?.parked?.[next.id]) return null;
+    return next;
+  }
+  /**
+   * Changer de région maintenant ? Modes Progression, Farm et Pokédex : captures, réglage autoRegion.
+   * Pokédex : seulement quand plus aucune zone ouverte de la région n'a d'espèce sauvage à capturer.
+   * Jamais tant qu'une Revanche du Conseil 4 de cette région est prête à être jouée (elle ne se joue que sur place).
+   */
+  function regionSwitchDue(save = readSave()) {
+    if (!CONFIG.autoRegion || mem.regionFail) return null;
+    const next = newRegionOpen(save);
+    if (!next) return null;
+    const mode = CONFIG.mode === 'pokedex' ? (CONFIG.dexFocus === 'catch' ? 'catch' : 'evo') : CONFIG.mode;
+    if (!['progression', 'farm', 'catch'].includes(mode) || CONFIG.activity) return null;
+    if (mode === 'catch') {
+      const region = save?.region ?? regionId(save);
+      const left = Rt.D.areaList.filter((a) => a.regionId === region && isUnlocked(a, save) && !dexStalled(a) && missingSpecies(a, save, 'catch').length);
+      if (left.length) return null;
+    }
+    if (rebattlePlan(save)) return null;
+    return next;
+  }
+
+  /** Entre deux rencontres : mène jusqu'à l'écran du partenaire de la nouvelle région. */
+  async function regionTick(save) {
+    const next = mem.regionGo ?? regionSwitchDue(save);
+    if (!next) return false;
+    if (!mem.regionGo) { mem.regionGo = next; mem.regionTries = 0; log(`🧭 ${Rt.D.regions[save?.region]?.name ?? 'région'} terminée → cap sur ${next.name} (partenaire : ${Rt.nameOf(starterFor(next.id))})`); }
+    if (++mem.regionTries > 25) { log(`⚠️ changement de région vers ${next.name} impossible pour l'instant — fais-le à la main (Zones → Régions)`); mem.regionFail = true; mem.regionGo = null; return false; }
+    const d = dialog();
+    const step = btn('ui.region.goTo', { scope: d ?? document }) ?? btn('ui.partner.enter') ?? btn('ui.region.see');
+    if (step) { step.click(); return true; }
+    // Liste des zones ouverte : onglet « Régions »
+    const regionsTab = d && btn('ui.home.regions', { scope: d });
+    if (regionsTab) { regionsTab.click(); return true; }
+    if (d) { closeDialog(); return true; }
+    const zones = zonesButton();
+    if (zones) { zones.click(); return true; }
+    if (location.pathname !== '/home') return goHome();
+    return false;
+  }
+
+  /** Écran « Choisis ton partenaire » : la Poké Ball du starter voulu, « Choisir », puis « C'est parti ! ». */
+  async function playPartner(d) {
+    const label = norm(d.getAttribute('aria-label'));
+    const reg = mem.regionGo ?? regionsSorted().find((r) => label.includes(norm(r.name))) ?? null;
+    const go = btn('ui.partner.go', { scope: d });
+    if (go) {
+      log(`🎉 nouvelle région : ${reg?.name ?? ''} — partenaire choisi`);
+      mem.regionGo = null; mem.regionTries = 0;
+      if (CONFIG.mode === 'farm') { CONFIG.farmAreaId = null; writeSettings({ farmAreaId: null }); }
+      go.click(); return true;
+    }
+    const list = starterList(reg);
+    const want = reg ? starterFor(reg.id) : null;
+    const yes = btn('ui.partner.yes', { scope: d });
+    if (yes) {
+      const shown = Rt.dexOf(captureParam('ui.partner.yes', 'name') ?? '') ?? Rt.dexOf(norm(yes.innerText).replace(norm(Rt.t('ui.partner.yes')).split('{')[0], '').trim());
+      if (!want || !shown || shown === want) { log(`🤝 partenaire : ${Rt.nameOf(shown ?? want)}`); yes.click(); return true; }
+      const no = btn('ui.partner.no', { scope: d });
+      if (no) { no.click(); return true; }
+    }
+    const ballRe = Rt.re('ui.partner.ball'), outRe = Rt.re('ui.partner.out');
+    const balls = $$('button[aria-label]', d).filter((x) => visible(x) && (ballRe.test(norm(x.getAttribute('aria-label'))) || outRe.test(norm(x.getAttribute('aria-label')))));
+    const i = Math.max(0, list.indexOf(want));
+    const target = balls.find((x) => norm(x.getAttribute('aria-label')) === norm(Rt.t('ui.partner.ball').replace('{n}', i + 1))) ?? balls[i];
+    if (target && enabled(target)) { target.click(); return true; }
+    // Introduction animée : un clic sur la scène la passe
+    const scene = d.querySelector('canvas')?.parentElement;
+    if (scene) { scene.click(); return true; }
+    return true; // on attend la fin de l'animation
+  }
+
   /* ═════════════════════════════ 7. BOT ═════════════════════════════ */
   const bot = {
     running: false, busy: false, lastActionAt: 0, idleTicks: 0, stats: { actions: 0 }, timer: null, ready: false, awaitingChange: false, observer: null,
@@ -3683,6 +3846,7 @@
           }
         }
 
+        if (!acted) { const d = dialog(); if (d && Rt.re('ui.partner.label').test(norm(d.getAttribute('aria-label')))) { where = 'partner'; acted = await playPartner(d); } }
         if (!acted && mem.errand === 'rebattle' && playRebattleEnd()) { acted = true; where = 'rebattle'; }
         if (!acted && bodyHas('ui.wipe.title')) { const r = btn('ui.wipe.tryAgain'); if (r) { settleBossFight(true); log('💀 équipe K.O. → réessayer'); r.click(); acted = true; } }
 
@@ -3934,13 +4098,14 @@
       ] },
       { title: 'Zones & boss', fields: [
         { p: 'autoTravel', t: 'bool', l: 'Changer de zone automatiquement' },
+        { p: 'autoRegion', t: 'bool', l: 'Changer de région une fois la Ligue battue', h: 'Progression et Farm : dès la Ligue battue. Pokédex : captures : quand plus aucune zone de la région n’a d’espèce à capturer. Jamais avant une Revanche du Conseil 4 prête.' },
         { p: 'farmGoal', t: 'sel', l: 'Mode Farm : objectif', o: [['xp', 'XP / chromatiques (zone choisie)'], ['xpAuto', 'XP (zone la plus rentable sans risque)'], ['gold', '₽ (zone la plus rentable)']] },
         { p: 'nextAreaLevelSlack', t: 'num', l: 'Zone suivante si niveau ≥ min − N', min: 0, max: 20 },
         { p: 'bossReadyScore', t: 'num', l: 'Boss : duel moyen exigé', min: 0.5, max: 3, step: 0.05 },
         { p: 'bossWorstScore', t: 'num', l: 'Boss : pire duel accepté', min: 0, max: 2, step: 0.05 },
         { p: 'bossFailMargin', t: 'pct', l: 'Exigence en plus par défaite' },
       ] },
-    ] },
+    ], special: 'regions' },
     { tab: 'Versus & Raids', icon: '🐉', groups: [
       { title: 'Modes Versus et Raids', fields: [
         { p: 'activityFallback', t: 'sel', l: 'En attendant (verrouillé / rien à faire)', o: [['progression', 'Progression'], ['pokedex', 'Pokédex : captures'], ['pokedexEvo', 'Pokédex : évolutions'], ['farm', 'Farm']] },
@@ -4074,6 +4239,7 @@
       if (t.special === 'ledger') b.append(...this.ledgerView());
       if (t.special === 'tools') b.append(...this.toolsView());
       if (t.special === 'activity') b.append(...this.activityView());
+      if (t.special === 'regions') b.append(...this.regionsView());
       this.panel.replaceChildren(tabs, b);
       b.scrollTop = scroll;
     },
@@ -4114,6 +4280,23 @@
         h('div', { className: 'btns' },
           h('button', { onclick: () => { Ledger.report(true); } }, '📝 Bilan dans le journal'),
           h('button', { onclick: () => { Ledger.reset(); log('📊 bilan remis à zéro'); this.renderPanel(); } }, '♻️ Remettre à zéro')),
+      ];
+    },
+    regionsView() {
+      const save = readSave();
+      const rows = regionsSorted().filter((r) => starterList(r).length).map((r) => {
+        const sel = h('select', { onchange: () => { setOption(`starterPick.${r.id}`, sel.value ? +sel.value : ''); this.renderPanel(); } });
+        const want = +(CONFIG.starterPick?.[r.id] || 0);
+        sel.add(new Option(`automatique (${Rt.nameOf(starterFor(r.id))})`, '', false, !want));
+        for (const d of starterList(r)) sel.add(new Option(Rt.nameOf(d), String(d), false, d === want));
+        const here = save?.region === r.id ? ' · ici' : save?.parked?.[r.id] ? ' · jouée' : '';
+        return h('label', { className: 'f', title: 'Partenaire choisi à l’entrée dans cette région' }, h('span', {}, `${r.name}${here}`), sel);
+      });
+      const next = save ? newRegionOpen(save) : null;
+      return [
+        h('h4', {}, 'Partenaire par région'),
+        ...rows,
+        h('div', { className: 'muted' }, next ? `${next.name} est ouverte : ${regionSwitchDue(save) ? 'le bot y va au prochain passage à l’accueil' : 'le bot y ira quand la région actuelle sera finie pour ce mode'}.` : 'Aucune nouvelle région ouverte pour l’instant.'),
       ];
     },
     statsView() {
@@ -4275,7 +4458,7 @@
   }
 
   const api = { itemEvolutions, evolutionTargets, healTierFor, shopTiers, bot, CONFIG, MODES, DEFAULTS, setMode, setOption, resetOptions, setTeamLock, bossMatchup, bossTeam, journal, Rt, mem, readBattle, teamMons, boxMons,
-    upgradeCandidates, stoneNeeds, stoneGoldShortfall, consumablesReserve, centerCandidates, comboGains, catchScreenDex, captureParam, ballItemOf, upgradePick, xpShare, usefulXp, pickTrainees, catchOnlyDex, wildShare, dexWorthEvolving, dexUsefulEvolutions, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, battleItems, ensureRaidTeam, openRaids, nextRaid, playRaidPage, playCatch, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
+    upgradeCandidates, rebattleThreats, bestTeamVs, rebattlePlan, starterFor, newRegionOpen, regionSwitchDue, regionTick, playPartner, stoneNeeds, stoneGoldShortfall, consumablesReserve, centerCandidates, comboGains, catchScreenDex, captureParam, ballItemOf, upgradePick, xpShare, usefulXp, pickTrainees, catchOnlyDex, wildShare, dexWorthEvolving, dexUsefulEvolutions, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, battleItems, ensureRaidTeam, openRaids, nextRaid, playRaidPage, playCatch, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
     areaThreats, missingSpecies, desiredArea, buildData, Engine,
     obtainedDex, fossilTargets, catchTargetDex, targetArea, wantLuck, canBreed, dayCarePick, dayCareDue, eventOpen, rebattleState, rebattleMatchup, rebattleDue,
     raidBossHp, raidOdds, raidTrainee, parseSchedule, scheduledMode, Stats, noteCatchResult, notify, WakeLock };

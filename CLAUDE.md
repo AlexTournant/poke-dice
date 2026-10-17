@@ -48,7 +48,7 @@ Lancer `npm test` avant toute PR : la CI le refait et bloque la fusion si ça é
 5. **Screens** — détection de l'écran courant (combat, rencontre, Centre, boutique…).
 6. **Policies** — une politique par écran : battle, items, encounter, center, catch, victory, area, shop, upgrades, zones, Versus, Raids.
 7. **Bot** — boucle `tick` pilotée par `MutationObserver`, verrou `busy`, garde-fous.
-8. **Modes** — `progression`, `pokedex` (captures / évolutions), `farm`, `versus`, `raid`. Routines tous modes (6.12 : roue, Pension, revanche) et confort (6.13 : notifications, statistiques, planning).
+8. **Modes** — `progression`, `pokedex` (captures / évolutions), `farm`, `versus`, `raid`. Routines tous modes (6.12 : roue, Pension, revanche), confort (6.13 : notifications, statistiques, planning), équipe de revanche et régions (6.14 : changement de région, partenaire).
 9. **UI** — barre ON/OFF + mode + 🔒 + ₽/h, panneau ⚙️ dans un Shadow DOM, menu Tampermonkey, raccourci Alt+B.
 
 Console : `window.PokeBot` expose `bot`, `CONFIG`, `setMode('farm')`, `journal`, `Engine`, etc.

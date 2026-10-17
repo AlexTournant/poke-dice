@@ -6,6 +6,14 @@ Chaque section `## [X.Y.Z]` correspond à un tag `vX.Y.Z`. Les notes de la relea
 
 ## [Non publié]
 
+## [1.9.0]
+
+### Ajouté
+
+- Revanche du Conseil 4 automatisée (`rebattle`, activée par défaut). Le palier s'enchaîne sans Centre ni changement d'équipe : le Centre compose d'abord l'équipe qui bat **tout** le palier. Pour chaque Pokémon des dresseurs restants, il cherche le meilleur duel de l'équipe, avec leurs améliorations (+ upgradeDelta du palier). Il maximise le pire duel puis la moyenne, en combinant les 8 meilleurs candidats. La revanche se lance quand cette équipe atteint `rebattleReadyScore`.
+- Changement de région automatique (`autoRegion`) en Progression, Farm et Pokédex : captures. Il a lieu une fois la Ligue de la région battue (et, en captures, plus aucune espèce sauvage à capturer dans les zones ouvertes), jamais avant une Revanche prête. Le bot passe par la bannière « Voir {région} » ou Zones → Régions → « Entrer à {région} ».
+- Partenaire par région (`starterPick`), réglable dans l'onglet « Équipe & zones » : la bonne Poké Ball, « Choisir », « C'est parti ! ». Par défaut, le starter dont la dernière évolution a le meilleur potentiel.
+
 ## [1.8.0]
 
 ### Ajouté
