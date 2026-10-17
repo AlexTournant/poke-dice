@@ -378,11 +378,14 @@ test('Versus : grosse Boîte (400 espèces N.50+, 50 équipes adverses) sans fig
   save.box = Array.from({ length: 400 }, (_, i) => ({ id: 'm' + i, dex: 5000 + i, level: 50 + (i % 40), currentHp: 10 }));
   const foes = Array.from({ length: 50 }, (_, k) => [5000 + k * 7 % 400, 5000 + (k * 13 + 1) % 400, 5000 + (k * 29 + 2) % 400]);
   P.mem.vsBest = null;
-  const t0 = performance.now();
-  const best = P.bestVersusTeam(save, foes);
-  const ms = performance.now() - t0;
+  // Meilleure de deux mesures (cache de résultats vidé à chaque fois) : un ralentissement passager de la machine
+  // ne fait plus échouer le test, un vrai gel (plusieurs secondes, comme avant la v0.5) si.
+  const timeIt = () => { P.mem.vsCache = new Map(); const t0 = performance.now(); const b = P.bestVersusTeam(save, foes); return [performance.now() - t0, b]; };
+  const [ms1, best] = timeIt();
+  const [ms2] = timeIt();
+  const ms = Math.min(ms1, ms2);
   assert.equal(best.dex.length, 3);
-  assert.ok(ms < 500, `choix d'équipe en ${ms.toFixed(0)} ms (doit rester < 500 ms)`);
+  assert.ok(ms < 500, `choix d'équipe en ${ms.toFixed(0)} ms (doit rester < 500 ms ; mesures ${ms1.toFixed(0)} / ${ms2.toFixed(0)} ms)`);
   const t1 = performance.now(); P.bestVersusTeam(save, foes);
   assert.ok(performance.now() - t1 < 5, 'deuxième appel : résultat en cache');
 });
@@ -1129,4 +1132,69 @@ test('Mode Revanche du Conseil 4 : équipe préparée au Centre, puis la carte d
     assert.equal(card.clicks, 1, 'ouverte depuis la carte de l’accueil');
     assert.equal(P.mem.errand, 'rebattle');
   } finally { P.mem.errand = null; P.Rt.i18n.clear(); delete P.Rt.D.config.events; delete P.Rt.D.config.rebattleLineups; delete P.Rt.D.regions.kanto.leagueAreaId; P.setMode('progression', { persist: false }); }
+});
+
+/* ── v1.10.1 : simulation de la série de revanche ── */
+test('Revanche : lineup comme le jeu — un seul Rival (celui du starter), améliorations adverses', () => {
+  const save = setup({ box: [['a', 999, 60]], team: ['a'], pokedex: [4, 999] }); // starter = Salamèche (1re espèce)
+  P.Rt.D.regions.kanto.leagueAreaId = 'route1';
+  P.Rt.D.areas.route1.enemyUpgradeLevel = 4;
+  P.Rt.D.trainers = {
+    e1: { id: 'e1', name: 'Olga', team: [{ dex: 16, level: 20 }] },
+    r1: { id: 'r1', name: 'Rival A', rivalOf: 1, team: [{ dex: 10, level: 20 }] },
+    r4: { id: 'r4', name: 'Rival B', rivalOf: 4, team: [{ dex: 25, level: 20 }] },
+    c1: { id: 'c1', name: 'Peter', upgradeLevel: 7, team: [{ dex: 999, level: 30 }] },
+  };
+  P.Rt.D.config.rebattleLineups = { kanto: { bronze: ['e1', 'r1', 'r4', 'c1'] } };
+  P.Rt.D.config.events = { rebattle: { access: 'all', tiers: [{ id: 'bronze', gold: 1, upgradeDelta: 2 }] } };
+  try {
+    const rb = P.rebattleState(save);
+    assert.deepEqual(rb.trainers.map((t) => t.id), ['e1', 'r4', 'c1'], 'seul le Rival qui correspond au starter Salamèche');
+    assert.equal(P.rebattleUpgrade(rb, rb.trainers[0]), 6, 'zone de la Ligue (4) + palier (2)');
+    assert.equal(P.rebattleUpgrade(rb, rb.trainers[2]), 7, 'niveau propre du dresseur, sans bonus de palier');
+    P.Rt.D.config.events.rebattle.tiers[0].upgradeDelta = 'max';
+    assert.equal(P.rebattleUpgrade(rb, rb.trainers[0]), 10, '« max » = 10');
+  } finally { delete P.Rt.D.config.events; delete P.Rt.D.config.rebattleLineups; delete P.Rt.D.regions.kanto.leagueAreaId; delete P.Rt.D.areas.route1.enemyUpgradeLevel; }
+});
+
+test('Revanche : la simulation garde les PV d’un combat à l’autre et choisit l’équipe qui gagne la série', () => {
+  setup({ box: [['a', 999, 50]], team: ['a'], pokedex: [999] });
+  addMon(7701, 'Fragile', 'normal', 120); addMon(7702, 'Mur', 'normal', 900); addMon(7703, 'Moyen', 'normal', 300);
+  addMon(7711, 'Adv', 'normal', 200);
+  const mon = (dex, id) => { const st = P.Rt.E.speciesAt(dex, 50); return { id, dex, name: P.Rt.nameOf(dex), level: 50, stats: st, maxHp: st.maxHp, levels: P.Rt.E.allLevels(3) }; };
+  const lv = P.Rt.E.allLevels(3);
+  const one = [{ dex: 7711, level: 50, levels: lv }];
+  const many = Array.from({ length: 8 }, () => ({ dex: 7711, level: 50, levels: lv, trainer: 'X' }));
+  const fragile = [mon(7701, 'f')];
+  assert.ok(P.simulateGauntlet(fragile, one).beaten <= 1);
+  const solo = P.simulateGauntlet([mon(7703, 'm')], one);
+  const series = P.simulateGauntlet([mon(7703, 'm')], many);
+  assert.ok(solo.wins, 'Moyen bat un adversaire seul');
+  assert.ok(!series.wins && series.beaten < 8, `mais pas huit d'affilée sans Centre (${series.beaten}/8)`);
+  assert.ok(series.stuckOn, 'la simulation dit sur qui ça bloque');
+  const best = P.bestGauntletTeam([mon(7701, 'f'), mon(7702, 'w'), mon(7703, 'm')], many);
+  assert.ok(best.team.some((m) => m.id === 'w'), 'le Mur fait partie de l’équipe');
+  assert.ok(best.beaten >= series.beaten);
+});
+
+test('Régions : une Revanche « prête » ne retient plus le départ en Progression, seulement une série en cours', () => {
+  P.setMode('progression', { persist: false });
+  const save = setup({ box: [['a', 999, 60]], team: ['a'], pokedex: [999] });
+  P.Rt.D.regions.kanto = { ...P.Rt.D.regions.kanto, leagueAreaId: 'cave', nextRegion: 'johto', starters: [1, 4, 7], orderIndex: 0 };
+  P.Rt.D.regions.johto = { id: 'johto', name: 'Johto', orderIndex: 1, dexRange: [152, 251], starters: [152, 155, 158], enabled: true };
+  save.areaProgress.cave = { cleared: true };
+  P.Rt.D.trainers.e1 = { id: 'e1', name: 'Olga', team: [{ dex: 16, level: 20 }] };
+  P.Rt.D.config.rebattleLineups = { kanto: { bronze: ['e1'] } };
+  P.Rt.D.config.events = { rebattle: { access: 'all', tiers: [{ id: 'bronze', gold: 1, upgradeDelta: 1 }] } };
+  P.mem.regionFail = false; P.mem.rbPlan = null;
+  try {
+    assert.equal(P.regionSwitchStatus(save).due, true, 'revanche gagnable mais pas commencée : on part quand même');
+    save.events = { rebattle: { kanto: { done: 0, step: 1 } } };
+    const st = P.regionSwitchStatus(save);
+    assert.equal(st.due, false);
+    assert.match(st.why, /Revanche du Conseil 4 est en cours/);
+    delete save.events;
+    P.setOption('autoRegion', false, { persist: false });
+    assert.match(P.regionSwitchStatus(save).why, /désactivé/, 'la raison est expliquée');
+  } finally { P.setOption('autoRegion', true, { persist: false }); delete P.Rt.D.config.events; delete P.Rt.D.config.rebattleLineups; }
 });
