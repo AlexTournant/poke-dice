@@ -3874,18 +3874,31 @@
    * Jamais tant qu'une Revanche du Conseil 4 de cette région est prête à être jouée (elle ne se joue que sur place).
    */
   function regionSwitchDue(save = readSave()) {
-    if (!CONFIG.autoRegion || mem.regionFail) return null;
+    const st = regionSwitchStatus(save);
+    return st.due ? st.next : null;
+  }
+  /**
+   * Changement de région : dû ou non, et pourquoi (affiché dans le panneau).
+   * La Revanche du Conseil 4 a son propre mode : elle ne retient le départ que si une série est EN COURS (avant la
+   * v1.11.0, une revanche « prête » bloquait le départ alors qu'en Progression elle ne démarrait jamais).
+   * @returns {{next:object|null, due:boolean, why:string}}
+   */
+  function regionSwitchStatus(save = readSave()) {
     const next = newRegionOpen(save);
-    if (!next) return null;
+    if (!next) return { next: null, due: false, why: 'aucune nouvelle région ouverte (bats la Ligue de la région)' };
+    if (!CONFIG.autoRegion) return { next, due: false, why: 'changement automatique désactivé (« Changer de région une fois la Ligue battue »)' };
+    if (mem.regionFail) return { next, due: false, why: 'la dernière tentative a échoué — utilise le bouton ci-dessous ou recharge la page' };
     const mode = CONFIG.mode === 'pokedex' ? (CONFIG.dexFocus === 'catch' ? 'catch' : 'evo') : CONFIG.mode;
-    if (!['progression', 'farm', 'catch'].includes(mode) || CONFIG.activity) return null;
+    if (CONFIG.activity) return { next, due: false, why: `pas en mode ${MODES[CONFIG.activity].label} (seulement Progression, Farm et Pokédex : captures)` };
+    if (!['progression', 'farm', 'catch'].includes(mode)) return { next, due: false, why: `pas en mode ${MODES[CONFIG.modeKey ?? CONFIG.mode].label} (seulement Progression, Farm et Pokédex : captures)` };
     if (mode === 'catch') {
       const region = save?.region ?? regionId(save);
       const left = Rt.D.areaList.filter((a) => a.regionId === region && isUnlocked(a, save) && !dexStalled(a) && missingSpecies(a, save, 'catch').length);
-      if (left.length) return null;
+      if (left.length) return { next, due: false, why: `il reste des espèces à capturer : ${left.slice(0, 3).map((a) => Rt.areaLabel(a)).join(', ')}${left.length > 3 ? '…' : ''}` };
     }
-    if (rebattlePlan(save)) return null;
-    return next;
+    const rb = eventOpen('rebattle', save) ? rebattleState(save) : null;
+    if (rb?.step > 0) return { next, due: false, why: `une Revanche du Conseil 4 est en cours (palier ${rb.tier.id}, combat ${rb.step + 1})` };
+    return { next, due: true, why: 'Ligue battue' };
   }
 
   /** Entre deux rencontres : mène jusqu'à l'écran du partenaire de la nouvelle région. */
@@ -4427,7 +4440,13 @@
       return [
         h('h4', {}, 'Partenaire par région'),
         ...rows,
-        h('div', { className: 'muted' }, next ? `${next.name} est ouverte : ${regionSwitchDue(save) ? 'le bot y va au prochain passage à l’accueil' : 'le bot y ira quand la région actuelle sera finie pour ce mode'}.` : 'Aucune nouvelle région ouverte pour l’instant.'),
+        (() => {
+          const st = save ? regionSwitchStatus(save) : { next: null, why: '' };
+          if (!st.next) return h('div', { className: 'muted' }, 'Aucune nouvelle région ouverte pour l’instant.');
+          return h('div', {},
+            h('div', { className: 'muted' }, `${st.next.name} est ouverte : ${st.due ? 'le bot y va au prochain passage entre deux rencontres' : 'le bot n’y va pas encore — ' + st.why}.`),
+            h('div', { className: 'btns' }, h('button', { onclick: () => { mem.regionFail = false; mem.regionGo = st.next; mem.regionTries = 0; log(`🧭 ${st.next.name} : départ demandé depuis le panneau`); this.renderPanel(); } }, `🧭 Aller à ${st.next.name} maintenant`)));
+        })(),
       ];
     },
     statsView() {
@@ -4590,7 +4609,7 @@
   }
 
   const api = { itemEvolutions, evolutionTargets, healTierFor, shopTiers, bot, CONFIG, MODES, DEFAULTS, setMode, setOption, resetOptions, setTeamLock, bossMatchup, bossTeam, journal, Rt, mem, readBattle, teamMons, boxMons,
-    upgradeCandidates, rebattleThreats, bestTeamVs, rebattlePlan, starterFor, newRegionOpen, regionSwitchDue, regionTick, playPartner, stoneNeeds, stoneGoldShortfall, consumablesReserve, centerCandidates, comboGains, catchScreenDex, captureParam, ballItemOf, upgradePick, xpShare, usefulXp, pickTrainees, catchOnlyDex, wildShare, dexWorthEvolving, dexUsefulEvolutions, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, rebattleActivity, simulateGauntlet, bestGauntletTeam, rebattleUpgrade, battleItems, ensureRaidTeam, openRaids, nextRaid, playRaidPage, playCatch, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
+    upgradeCandidates, rebattleThreats, bestTeamVs, rebattlePlan, starterFor, newRegionOpen, regionSwitchDue, regionSwitchStatus, regionTick, playPartner, stoneNeeds, stoneGoldShortfall, consumablesReserve, centerCandidates, comboGains, catchScreenDex, captureParam, ballItemOf, upgradePick, xpShare, usefulXp, pickTrainees, catchOnlyDex, wildShare, dexWorthEvolving, dexUsefulEvolutions, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, rebattleActivity, simulateGauntlet, bestGauntletTeam, rebattleUpgrade, battleItems, ensureRaidTeam, openRaids, nextRaid, playRaidPage, playCatch, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
     areaThreats, missingSpecies, desiredArea, buildData, Engine,
     obtainedDex, fossilTargets, catchTargetDex, targetArea, wantLuck, canBreed, dayCarePick, dayCareDue, eventOpen, rebattleState, rebattleMatchup, rebattleDue,
     raidBossHp, raidOdds, raidTrainee, parseSchedule, scheduledMode, Stats, noteCatchResult, notify, WakeLock };

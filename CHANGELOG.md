@@ -15,6 +15,7 @@ Chaque section `## [X.Y.Z]` correspond à un tag `vX.Y.Z`. Les notes de la relea
 ### Corrigé
 
 - Revanche : la série était préparée contre **tous** les Rivaux du palier. Comme le jeu, le bot ne garde que celui qui correspond à ton starter.
+- Régions : en Progression, le bot ne partait pas pour la région suivante alors que la Ligue était battue. Une Revanche du Conseil 4 « prête » retenait le départ, mais elle ne démarrait jamais (l'équipe de revanche n'était pas composée tant qu'un boss attendait dans la zone). La revanche a maintenant son propre mode : elle ne retient le départ que si une série est **en cours**. Le panneau (Équipe & zones) dit pourquoi le bot ne part pas encore, et un bouton « 🧭 Aller à {région} maintenant » force le départ.
 - Revanche : améliorations adverses calculées comme le jeu (niveau propre du dresseur tel quel, sinon zone de la Ligue + bonus du palier, « max » = 10). En combat, le bot s'en sert aussi pour soigner, relancer, choisir le meneur et changer de Pokémon.
 
 ## [1.10.0]
