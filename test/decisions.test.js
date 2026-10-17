@@ -272,6 +272,41 @@ test('Pokédex : une zone qui piétine (40 rencontres sans nouvelle espèce) est
   localStorage.removeItem('pokebot.dexStall');
 });
 
+test('Pokédex : fossiles (poids nul) et fossiles en train de revivre ne retiennent pas le bot dans la zone', () => {
+  P.setMode('pokedex', { persist: false });
+  localStorage.removeItem('pokebot.dexStall'); P.mem.dexWatch = null;
+  const forest = bundle.areas.find((a) => a.id === 'forest');
+  const pool = forest.wildPool;
+  try {
+    // Le jeu ne compte que les espèces de poids > 0 ("Tous capturés") : Raichu à poids nul = fossile de la zone
+    forest.wildPool = [...pool, { dex: 26, weight: 0, minLevel: 20, maxLevel: 20 }];
+    const save = setup({ box: [['p', 16, 15]], team: ['p'], pokedex: [10, 16, 25], area: 'forest' });
+    assert.deepEqual(P.missingSpecies(P.Rt.D.areas.forest, save), [], 'espèce à poids nul ignorée');
+    // Pikachu manquant mais déjà en Boîte sous forme de fossile (revivesAt) : compté comme obtenu
+    const save2 = setup({ box: [['p', 16, 15], ['f', 25, 20]], team: ['p'], pokedex: [10, 16], area: 'forest' });
+    save2.box[1].revivesAt = Date.now() + 3600e3;
+    assert.deepEqual(P.missingSpecies(P.Rt.D.areas.forest, save2), [], 'fossile en train de revivre = obtenu');
+    assert.notEqual(P.desiredArea(save2).id, 'forest', 'la forêt est complète → on passe à la suite');
+    assert.ok(!P.ballPlan(save2).species.some((x) => x.dex === 25), 'pas de Balls achetées pour un fossile');
+  } finally { forest.wildPool = pool; }
+});
+
+test('Raid : échelles de type du jeu (nos coups super efficaces ×1,3, ceux du boss ×2)', () => {
+  setup({ box: [['a', 999, 50]], team: ['a'], pokedex: [999] });
+  addMon(7101, 'Eau', 'water', 300); addMon(7102, 'Normal', 'normal', 300);
+  const E = P.Rt.E;
+  const water = E.speciesAt(7101, 50);
+  const fireDef = ['fire'];
+  const base = E.avgDamage(water.dice, { attackerTypes: water.types, defTypes: ['normal'], levels: E.allLevels(5) });
+  const sup = E.avgDamage(water.dice, { attackerTypes: water.types, defTypes: fireDef, levels: { ...E.allLevels(5), typeScale: { super: 1.3, resisted: 0.5, immune: 0 } } });
+  assert.ok(Math.abs(sup / base - 1.3) < 0.1, `super efficace en raid ≈ ×1,3 (mesuré ×${(sup / base).toFixed(2)})`);
+  assert.equal(E.scaleEff(0, { super: 2, resisted: 0.7, immune: 0.5 }), 0.5, 'le boss passe une immunité à ×0,5');
+  assert.equal(E.scaleEff(2, null), 2, 'hors raid : efficacité inchangée');
+  // Défense : contre un boss Plante (×2 sur l'Eau), le Normal survit plus longtemps et inflige plus au total
+  addMon(7103, 'BossPlante', 'grass', 900);
+  assert.ok(P.raidValue(7102, 50, 7103, 50) > P.raidValue(7101, 50, 7103, 50), 'la défense compte plus que l’attaque en raid');
+});
+
 test('Versus : simulation 3 contre 3 et meilleure équipe au N.50', () => {
   P.setMode('progression', { persist: false });
   const save = setup({ box: [['a', 999, 50], ['b', 16, 55], ['c', 12, 60], ['d', 10, 12]], team: ['a'], pokedex: [999, 16, 12, 10] });
