@@ -169,6 +169,7 @@
     // Confort
     notify: true,                 // notification du navigateur : chromatique, légendaire, boss, Œuf chromatique, bot arrêté
     notifySound: true,            // ↳ petit son en plus
+    keepAwake: true,              // empêche l'écran (et donc le PC) de se mettre en veille tant que le bot tourne
     schedule: '',                 // planning : "08:00-23:00=pokedex; 23:00-08:00=farm" (vide = désactivé)               // mode Farm : 'xp' (zone choisie) ou 'gold' (zone qui rapporte le plus de ₽ par rencontre)
 
     // Performance (fin de jeu : Pokémon à 5-6 dés, grosse Boîte)
@@ -3135,6 +3136,25 @@
       }
     } catch {}
   }
+  /**
+   * Anti-veille : Screen Wake Lock du navigateur. Tant que le bot tourne et que l'onglet est visible,
+   * l'écran ne s'éteint pas et le PC ne se met pas en veille. Le navigateur libère le verrou quand l'onglet
+   * est caché ou réduit : on le redemande au retour. Il ne protège pas d'une fermeture du capot ni d'une
+   * mise en veille forcée par Windows (batterie faible, stratégie de l'entreprise).
+   */
+  const WakeLock = {
+    lock: null,
+    async on() {
+      if (!CONFIG.keepAwake || this.lock || document.hidden) return;
+      try {
+        if (!navigator.wakeLock?.request) { if (!mem.wakeWarned) { mem.wakeWarned = true; log('☕ anti-veille indisponible dans ce navigateur'); } return; }
+        this.lock = await navigator.wakeLock.request('screen');
+        this.lock.addEventListener?.('release', () => { this.lock = null; });
+        if (!mem.wakeLogged) { mem.wakeLogged = true; log('☕ anti-veille actif : l’écran et le PC restent éveillés tant que le bot tourne'); }
+      } catch (e) { this.lock = null; if (!mem.wakeWarned) { mem.wakeWarned = true; log(`☕ anti-veille refusé par le navigateur (${e.message})`); } }
+    },
+    async off() { const l = this.lock; this.lock = null; try { await l?.release(); } catch {} },
+  };
   const askNotifyPermission = () => { try { if (CONFIG.notify && typeof Notification !== 'undefined' && Notification.permission === 'default') Notification.requestPermission(); } catch {} };
 
   /**
@@ -3282,6 +3302,7 @@
       if (!this.ready) { await Rt.load(); this.ready = true; loadSettings(); ui.fillAreas(); }
       this.running = true; this.idleTicks = 0;
       askNotifyPermission();
+      WakeLock.on();
       this.timer ??= setInterval(() => this.tick(), CONFIG.tickMs);
       this.watchScreen();
       applyShortAnimations();
@@ -3303,10 +3324,11 @@
       });
       this.observer.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['disabled', 'aria-disabled', 'aria-pressed', 'aria-expanded', 'aria-label'] });
       document.addEventListener('visibilitychange', () => {
+        if (this.running && !document.hidden) WakeLock.on(); // le verrou saute quand l'onglet est caché
         if (this.running && document.hidden) log('⚠️ onglet en arrière-plan : Chrome ralentit fortement le jeu (tour ×3 mesuré). Garde la fenêtre visible.');
       });
     },
-    stop(reason = 'manuel') { this.running = false; if (reason === 'manuel') writeSettings({ running: false }); log('⏸ arrêté : ' + reason); ui.refresh(reason); },
+    stop(reason = 'manuel') { this.running = false; WakeLock.off(); if (reason === 'manuel') writeSettings({ running: false }); log('⏸ arrêté : ' + reason); ui.refresh(reason); },
     toggle() { this.running ? this.stop() : this.start(); },
   };
 
@@ -3353,6 +3375,7 @@
   /** Change un réglage (chemin "buy.heal", "stock.rareBall"…) et le mémorise. */
   function setOption(path, value, { persist = true } = {}) {
     setPath(CONFIG, path, value);
+    if (path === 'keepAwake' && typeof WakeLock !== 'undefined') { if (value && bot.running) WakeLock.on(); else WakeLock.off(); }
     if (persist) writeSettings({ cfg: { ...readSettings().cfg, [path]: value } });
     mem.lastChoresGold = -1; mem.centerDone = null; mem.goldArea = null; mem.saveLog = null;
     if (path === 'activityFallback' && CONFIG.activity) setMode(CONFIG.activity);
@@ -3518,6 +3541,7 @@
         { p: 'showGoldRate', t: 'bool', l: 'Afficher l’or et les ₽ gagnés par heure' },
         { p: 'notify', t: 'bool', l: 'Notifications (chromatique, légendaire, boss, bot arrêté…)', h: 'Le navigateur demande l’autorisation au démarrage du bot.' },
         { p: 'notifySound', t: 'bool', l: '↳ avec un petit son' },
+        { p: 'keepAwake', t: 'bool', l: 'Anti-veille : le PC ne se met pas en veille pendant que le bot tourne', h: 'Verrou d’écran du navigateur (Wake Lock). Garde l’onglet visible : réduit ou caché, le navigateur le libère.' },
       ] },
       { title: 'Planning', fields: [
         { p: 'schedule', t: 'text', l: 'Plages horaires', h: 'Exemple : 08:00-23:00=pokedex; 23:00-08:00=farm — modes : ' + Object.keys(MODES).join(', ') + '. Vide = désactivé.' },
@@ -3810,7 +3834,7 @@
     upgradeCandidates, upgradePick, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, nextRaid, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
     areaThreats, missingSpecies, desiredArea, buildData, Engine,
     obtainedDex, fossilTargets, catchTargetDex, targetArea, wantLuck, canBreed, dayCarePick, dayCareDue, eventOpen, rebattleState, rebattleMatchup, rebattleDue,
-    raidBossHp, raidOdds, raidTrainee, parseSchedule, scheduledMode, Stats, noteCatchResult, notify };
+    raidBossHp, raidOdds, raidTrainee, parseSchedule, scheduledMode, Stats, noteCatchResult, notify, WakeLock };
   root.PokeBot = api;
   // Hook de débogage : évalue du code DANS la portée du script (permet de patcher une fonction à chaud).
   root.PokeBot.__eval = (src) => eval(src); // eslint-disable-line no-eval

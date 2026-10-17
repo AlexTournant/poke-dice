@@ -43,6 +43,7 @@ Dans tous les modes, une **espèce visée** (onglet Captures) emmène le bot dan
 ### Confort
 
 - **Notifications** du navigateur (avec un petit son) : chromatique, légendaire, boss battu, raid réussi, Œuf chromatique, bot arrêté.
+- **Anti-veille** : tant que le bot tourne et que l'onglet est visible, l'écran ne s'éteint pas et le PC ne se met pas en veille (verrou d'écran du navigateur). Ça ne protège pas d'une fermeture du capot.
 - **Planning** : change de mode selon l'heure, par exemple `08:00-23:00=pokedex; 23:00-08:00=farm`.
 - **Statistiques** (onglet Bilan) : captures, chromatiques, taux de réussite de chaque Ball, raids, Œufs, tours de roue.
 

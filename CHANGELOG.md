@@ -19,6 +19,7 @@ Chaque section `## [X.Y.Z]` correspond à un tag `vX.Y.Z`. Les notes de la relea
 - Routines tous modes : tour gratuit de la Roue de la fortune (`eventWheel`), Pension (`dayCare` : éclosion des Œufs, dépôt d'un couple compatible), Revanche du Conseil 4 (`rebattle`, désactivée par défaut).
 - Notifications du navigateur et petit son (`notify`, `notifySound`) : chromatique, légendaire, boss battu, raid réussi, Œuf chromatique, objectif atteint, bot arrêté.
 - Planning par plages horaires (`schedule`).
+- Anti-veille (`keepAwake`, activé par défaut) : verrou d'écran du navigateur (Wake Lock) tant que le bot tourne et que l'onglet est visible. Le PC ne se met plus en veille pendant une session.
 - Statistiques de session dans l'onglet Bilan (clé `pokebot.stats`) : captures, chromatiques, réussite de chaque Ball, raids, Œufs, roue.
 - Groupes Œuf lus dans le bundle du jeu (ils ne sont pas dans IndexedDB).
 

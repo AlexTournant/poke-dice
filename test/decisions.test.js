@@ -575,3 +575,22 @@ test('Statistiques : un lancer réussi est compté avec sa Ball', () => {
   assert.equal(d.newSpecies, 1);
   assert.equal(P.mem.throwPending, null);
 });
+
+test('Anti-veille : verrou pris au démarrage, rendu à l’arrêt', async () => {
+  const calls = [];
+  // Node ≥ 21 a un navigator en lecture seule : on le remplace le temps du test
+  const before = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { wakeLock: { request: async (t) => { calls.push(t); return { release: async () => calls.push('release'), addEventListener() {} }; } } } });
+  try {
+    P.setOption('keepAwake', true, { persist: false });
+    await P.WakeLock.on();
+    assert.deepEqual(calls, ['screen']);
+    await P.WakeLock.on();
+    assert.equal(calls.length, 1, 'un seul verrou à la fois');
+    await P.WakeLock.off();
+    assert.deepEqual(calls, ['screen', 'release']);
+    P.setOption('keepAwake', false, { persist: false });
+    await P.WakeLock.on();
+    assert.equal(calls.length, 2, 'option coupée : aucun verrou');
+  } finally { if (before) Object.defineProperty(globalThis, 'navigator', before); else delete globalThis.navigator; P.setOption('keepAwake', true, { persist: false }); }
+});
