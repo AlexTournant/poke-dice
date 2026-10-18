@@ -6,6 +6,21 @@ Chaque section `## [X.Y.Z]` correspond à un tag `vX.Y.Z`. Les notes de la relea
 
 ## [Non publié]
 
+## [1.13.0]
+
+### Ajouté
+
+- Casino (rencontre des villes : Doublonville, Carmin-sur-Mer…). Avant, le bot passait toujours. Maintenant :
+  - **tant que Porygon (le lot) manque au Pokédex**, il entre et tourne jusqu'au jackpot. Le jackpot sort 1 tour sur 10, soit environ ₽15 de perte nette en moyenne. Réglage « garder au moins (₽) » pendant la chasse (`casinoHuntKeep`, ₽0 par défaut) ;
+  - **une fois Porygon obtenu**, il ne rejoue que si ses ₽ restent au-dessus du seuil (`casinoKeep`, ₽1 000), et au plus 20 tours (`casinoMaxSpins`) ou ₽100 perdus (`casinoMaxLoss`) par visite. Après Porygon, un tour perd ₽0,50 en moyenne ;
+  - il ne change pas de zone pour chercher le casino : il joue quand il tombe dessus. Tout se coupe avec « Casino » (`casino`) dans l'onglet des routines.
+
+  Les tirages et le lot sont lus dans la configuration du jeu (`config.slotMachine`). Statistiques : tours, jackpots et solde du casino.
+
+### Corrigé
+
+- Écran de la machine à sous : le bot ne le reconnaissait pas, car il cherchait « Machine à sous » dans le texte de la page alors que c'est un libellé d'accessibilité. Il pouvait donc rester bloqué dessus.
+
 ## [1.12.0]
 
 ### Ajouté

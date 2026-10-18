@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pokédice Autopilot
 // @namespace    pokedice-bot
-// @version      1.12.0
+// @version      1.13.0
 // @description  Joue à Pokédice — modes Progression / Pokédex / Farm / Versus / Raids : combats optimisés, soins, captures, boutique, améliorations, Centre, zones.
 // @match        https://poke-dice.netlify.app/*
 // @grant        none
@@ -175,6 +175,11 @@
     raidTrain: true,              // …et on entraîne au Centre le meilleur « contre » du boss qui n'a pas le niveau plafond
     // Événements et routines (tous modes)
     eventWheel: true,             // Roue de la fortune : un tour gratuit par jour
+    casino: true,                 // Casino des villes : tant que Porygon (le lot) manque, on tourne jusqu'au jackpot
+    casinoHuntKeep: 0,            // ↳ pendant la chasse au lot : ₽ gardés quoi qu'il arrive
+    casinoKeep: 1000,             // ↳ lot obtenu : ne tourne que si les ₽ restent ≥ seuil après le tour (−₽0,50 par tour en moyenne)
+    casinoMaxSpins: 20,           // ↳ lot obtenu : tours max par visite
+    casinoMaxLoss: 100,           // ↳ lot obtenu : ₽ perdus max par visite
     rebattle: true,               // Revanche du Conseil 4 : le Centre compose l'équipe qui bat tout le palier, puis enchaîne les 5 combats
     rebattleReadyScore: 1.4,      // ↳ (ancien critère, remplacé par la simulation de la série)
     rebattleHpMargin: 0.15,       // ↳ la série simulée doit être gagnée avec au moins 15 % des PV de l'équipe restants…
@@ -1177,6 +1182,65 @@
     return null;
   }
 
+  /* Casino (rencontre des villes) : machine à sous, ₽10 le tour. Tirages du jeu (config.slotMachine) : 1 Ball 50 % (+₽1),
+   * 2 Balls 30 % (+₽10), 3 Balls 10 % (+₽50), jackpot 10 % = le lot (Porygon N.30), ou +₽10 si on l'a déjà au niveau.
+   * Lot manquant : ~10 tours pour l'avoir (≈ ₽15 de perte nette) → on joue jusqu'au jackpot.
+   * Lot obtenu : chaque tour perd ₽0,50 en moyenne → seulement au-dessus du seuil, et dans la limite par visite. */
+  const slotCfg = () => ({ cost: 10, prizeDex: 137, prizeLevel: 30, ...(Rt.D.config.slotMachine ?? {}) });
+
+  /**
+   * Faut-il (encore) tourner ? `visit` : { funGold, funSpins } = ₽ et tours depuis que le lot est obtenu, pour cette visite.
+   * Retour : { play, hunt, why } — hunt = le lot manque encore au Pokédex.
+   */
+  function casinoDecision(save, visit = {}) {
+    const c = slotCfg(), cost = Math.max(0, Math.round(c.cost)), gold = save?.gold ?? 0;
+    const hunt = !(save?.pokedex ?? []).includes(c.prizeDex), prize = Rt.nameOf(c.prizeDex);
+    if (!CONFIG.casino) return { play: false, hunt, why: 'casino désactivé' };
+    if (gold < cost) return { play: false, hunt, why: `pas assez de ₽ (₽${gold})` };
+    if (hunt) {
+      if (gold - cost < CONFIG.casinoHuntKeep) return { play: false, hunt, why: `chasse ${prize} : on garde ₽${CONFIG.casinoHuntKeep}` };
+      return { play: true, hunt, why: `chasse ${prize} (jackpot 1 tour sur 10)` };
+    }
+    if (gold - cost < CONFIG.casinoKeep) return { play: false, hunt, why: `₽${gold} : sous le seuil de ₽${CONFIG.casinoKeep}` };
+    if ((visit.funSpins ?? 0) >= CONFIG.casinoMaxSpins) return { play: false, hunt, why: `${CONFIG.casinoMaxSpins} tours joués` };
+    const lost = (visit.funGold ?? gold) - gold;
+    if (lost >= CONFIG.casinoMaxLoss) return { play: false, hunt, why: `₽${lost} perdus (max ₽${CONFIG.casinoMaxLoss})` };
+    return { play: true, hunt, why: `₽${gold} ≥ seuil ₽${CONFIG.casinoKeep}` };
+  }
+
+  /** Écran de la machine à sous (section aria-label « Machine à sous »), dans la page de la zone. */
+  const casinoMachine = () => $$('section[aria-label]').find((x) => visible(x) && Rt.re('ui.casino.machine', 'Machine à sous', { exact: true }).test(norm(x.getAttribute('aria-label')))) ?? null;
+
+  async function playCasino() {
+    if (bodyHas('ui.casino.spinning')) return true; // rouleaux en cours (PARTIR grisé) : on attend
+    const save = readSave(), gold = save?.gold ?? 0, c = slotCfg();
+    const v = (mem.casino ??= { startGold: gold, spins: 0, jackpots: 0, hunted: false, funGold: null, funSpins: 0, pending: false });
+    if (v.pending) { // résultat du tour précédent
+      v.pending = false;
+      if (lineHas('ui.casino.jackpotWon') || lineHas('ui.casino.jackpotGrew') || lineHas('ui.casino.jackpotHave')) { v.jackpots++; Stats.add('casinoJackpots'); log('🎰 JACKPOT !'); }
+    }
+    const d = casinoDecision(save, v);
+    if (d.hunt) v.hunted = true;
+    else if (v.funGold == null) {
+      if (v.hunted) { log(`🎰 ${Rt.nameOf(c.prizeDex)} obtenu au casino après ${v.spins} tours !`); notify('Casino', `${Rt.nameOf(c.prizeDex)} obtenu !`); }
+      v.funGold = gold; // la limite par visite compte à partir d'ici
+    }
+    const spin = btn('ui.casino.spin');
+    if (d.play && spin) {
+      v.spins++; if (!d.hunt) v.funSpins++; v.pending = true;
+      Stats.add('casinoSpins');
+      if (v.spins === 1 || v.spins % 10 === 0) log(`🎰 Casino : tour ${v.spins} — ${d.why}`);
+      spin.click(); return true;
+    }
+    const leave = btn('ui.casino.leave');
+    if (!leave) return false;
+    const net = gold - v.startGold;
+    Stats.add('casinoNet', net);
+    log(`🎰 Casino : on part — ${d.why} (${v.spins} tour${v.spins > 1 ? 's' : ''}, ${net >= 0 ? '+' : ''}₽${net})`);
+    mem.casino = null;
+    leave.click(); return true;
+  }
+
   async function playEncounter(kind) {
     mem.encounterPending = null;
     if (kind === 'wild' || kind === 'trainer') noteDexProgress(); // on traite la rencontre : le changement de zone redeviendra possible ensuite
@@ -1184,9 +1248,11 @@
     const area = currentArea(save);
     if (kind === 'item') { const p = btn('ui.enc.pickUp'); if (p) { log('🎒 ramasse'); p.click(); return true; } }
     if (kind === 'casino') {
-      // Carte de rencontre : on n'entre pas (machine à sous payante) ; si on est dedans : PARTIR
-      const s = btn(['ui.casino.leave', 'ui.enc.skip', 'ui.enc.notYet']);
-      if (s) { log('↷ Casino : on passe'); s.click(); return true; }
+      // Carte de rencontre : ENTRER si on va jouer ; sinon PASSER, ou ENTRER puis PARTIR quand le jeu ne laisse pas passer
+      const d = casinoDecision(save), e = btn('ui.enc.enter'), s = btn(['ui.enc.skip', 'ui.enc.notYet']);
+      const c = d.play ? e ?? s : s ?? e;
+      mem.casino = null; // nouvelle visite
+      if (c) { log(`${c === s ? '↷ Casino : on passe' : d.play ? '🎰 Casino : on entre' : '↷ Casino : on entre pour repartir'} — ${d.why}`); c.click(); return true; }
     }
     if (kind === 'trick') return playTrick();
     if (kind === 'center') {
@@ -3747,7 +3813,7 @@
   const Stats = {
     d: null,
     data() { if (!this.d) { try { this.d = JSON.parse(localStorage.getItem(STATS_KEY)); } catch {} this.d ??= this.blank(); } return this.d; },
-    blank: () => ({ since: Date.now(), caught: 0, newSpecies: 0, shinySeen: 0, shinyCaught: 0, throws: {}, raidsWon: 0, raidsLost: 0, eggs: 0, shinyEggs: 0, spins: 0, rebattleWins: 0 }),
+    blank: () => ({ since: Date.now(), caught: 0, newSpecies: 0, shinySeen: 0, shinyCaught: 0, throws: {}, raidsWon: 0, raidsLost: 0, eggs: 0, shinyEggs: 0, spins: 0, rebattleWins: 0, casinoSpins: 0, casinoJackpots: 0, casinoNet: 0 }),
     add(k, n = 1) { const d = this.data(); d[k] = (d[k] ?? 0) + n; this.save(); },
     /** Un lancer de Ball : par nom affiché, réussi ou non. */
     throw(ball, ok) { const d = this.data(); const t = (d.throws[ball] ??= { n: 0, ok: 0 }); t.n++; if (ok) t.ok++; this.save(); },
@@ -4141,7 +4207,7 @@
 
         if (!acted && bodyHas('ui.center.restHere')) { where = 'center'; acted = await playCenter(); }
 
-        if (!acted) { const leave = btn('ui.casino.leave'); if (leave && bodyHas('ui.casino.machine')) { log('↷ Casino : on part'); leave.click(); acted = true; } }
+        if (!acted && casinoMachine()) { where = 'casino'; acted = await playCasino(); }
         if (!acted) { const k = encounterKind(); if (k) { where = 'enc:' + k; acted = await playEncounter(k); } }
 
         if (!acted) { where = 'victory'; acted = await playVictory(); }
@@ -4403,6 +4469,11 @@
       ] },
       { title: 'Événements et routines (tous modes)', fields: [
         { p: 'eventWheel', t: 'bool', l: 'Roue de la fortune : tour gratuit du jour' },
+        { p: 'casino', t: 'bool', l: 'Casino : jouer jusqu’au jackpot tant que Porygon manque', h: 'Le Casino est une rencontre des villes (Doublonville, Carmin-sur-Mer…). Jackpot 1 tour sur 10 : Porygon coûte ≈ ₽15 de perte nette en moyenne. Le bot ne change pas de zone pour le chercher.' },
+        { p: 'casinoHuntKeep', t: 'num', l: '↳ pendant la chasse, garder au moins (₽)', min: 0, max: 100000, step: 10 },
+        { p: 'casinoKeep', t: 'num', l: '↳ Porygon obtenu : rejouer seulement si ₽ ≥ seuil', min: 0, max: 1000000, step: 100, h: 'Après Porygon, le casino perd ₽0,50 par tour en moyenne (−5 %) : c’est un passe-temps. Le bot ne descend jamais sous ce seuil.' },
+        { p: 'casinoMaxSpins', t: 'num', l: '↳ tours max par visite', min: 0, max: 1000 },
+        { p: 'casinoMaxLoss', t: 'num', l: '↳ ₽ perdus max par visite', min: 0, max: 100000, step: 10 },
         { p: 'dayCare', t: 'bool', l: 'Pension : faire éclore les Œufs et déposer un couple' },
         { p: 'dayCareCheckMin', t: 'num', l: '↳ y passer au plus toutes les N min', min: 5, max: 600, step: 5 },
         { p: 'rebattle', t: 'bool', l: 'Revanche du Conseil 4 quand l’équipe est prête' },
@@ -4598,6 +4669,7 @@
           row('Raids', `${d.raidsWon} gagnés · ${d.raidsLost} perdus`),
           row('Œufs éclos', `${d.eggs}${d.shinyEggs ? ` (dont ${d.shinyEggs} chromatique${d.shinyEggs > 1 ? 's' : ''})` : ''}`),
           row('Roue de la fortune', `${d.spins} tour${d.spins > 1 ? 's' : ''}`),
+          row('Casino', `${d.casinoSpins ?? 0} tours · ${d.casinoJackpots ?? 0} jackpot${(d.casinoJackpots ?? 0) > 1 ? 's' : ''} · ${(d.casinoNet ?? 0) >= 0 ? '+' : ''}₽${d.casinoNet ?? 0}`),
           row('Revanche : victoires', String(d.rebattleWins))),
         h('div', { className: 'btns' }, h('button', { onclick: () => { Stats.reset(); log('📈 statistiques remises à zéro'); this.renderPanel(); } }, '♻️ Statistiques à zéro')),
       ];
@@ -4761,7 +4833,7 @@
   const api = { itemEvolutions, evolutionTargets, healTierFor, shopTiers, bot, CONFIG, MODES, DEFAULTS, setMode, setOption, resetOptions, setTeamLock, bossMatchup, bossTeam, journal, Rt, mem, readBattle, teamMons, boxMons,
     upgradeCandidates, rebattleThreats, bestTeamVs, rebattlePlan, starterFor, newRegionOpen, regionSwitchDue, regionSwitchStatus, playedRegionTarget, partnerDialog, regionTick, playPartner, stoneNeeds, stoneGoldShortfall, consumablesReserve, centerCandidates, comboGains, catchScreenDex, captureParam, ballItemOf, upgradePick, xpShare, usefulXp, pickTrainees, catchOnlyDex, wildShare, dexWorthEvolving, dexUsefulEvolutions, xpTeamPlan, xpPerEncounter, bestXpArea, multiExpOn, shopWishlist, shopPlan, chores, noteDexProgress, sellList, voluntarySwitch, teamFight, fastDmg, bestVersusTeam, bestDefenseTeam, requestDefenseTeam, raidValue, raidStatus, progressOf, pokedexOf, rebattleActivity, simulateGauntlet, bestGauntletTeam, rebattleUpgrade, battleItems, ensureRaidTeam, openRaids, nextRaid, explain, explainClear, playRaidPage, playCatch, legendaryRaids, dailyRaidOpen, activityTick, actState, ballPlan, catchPct, catchNeed, chooseBall, shouldHeal, pickHeal, goldPerEncounter, bestGoldArea, generalWish, Ledger, ui,
     areaThreats, missingSpecies, desiredArea, buildData, Engine,
-    obtainedDex, fossilTargets, catchTargetDex, targetArea, wantLuck, canBreed, dayCarePick, dayCareDue, eventOpen, rebattleState, rebattleMatchup, rebattleDue,
+    obtainedDex, fossilTargets, catchTargetDex, targetArea, wantLuck, canBreed, dayCarePick, dayCareDue, eventOpen, rebattleState, rebattleMatchup, rebattleDue, casinoDecision, slotCfg,
     raidBossHp, raidOdds, raidTrainee, parseSchedule, scheduledMode, Stats, noteCatchResult, notify, WakeLock };
   root.PokeBot = api;
   // Hook de débogage : évalue du code DANS la portée du script (permet de patcher une fonction à chaud).

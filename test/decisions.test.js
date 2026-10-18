@@ -1385,3 +1385,30 @@ test('Bandeau « pourquoi » : raison affichée quand l’activité ne se joue p
     assert.equal(P.mem.why, null);
   } finally { P.mem.why = null; P.setMode('progression', { persist: false }); }
 });
+
+test('Casino : jusqu’au jackpot tant que Porygon manque, puis seuil et limite par visite', () => {
+  P.setOption('casino', true, { persist: false });
+  P.Rt.D.config.slotMachine = { cost: 10, prizeDex: 137, prizeLevel: 30 };
+  try {
+    const hunt = { gold: 15, pokedex: [16] };
+    assert.ok(P.casinoDecision(hunt).play, 'Porygon manquant : on tourne même avec ₽15');
+    assert.ok(P.casinoDecision(hunt).hunt);
+    assert.ok(!P.casinoDecision({ gold: 9, pokedex: [16] }).play, 'moins que le prix du tour');
+    P.setOption('casinoHuntKeep', 10, { persist: false });
+    assert.ok(!P.casinoDecision(hunt).play, '₽15 − ₽10 < ₽10 gardés');
+    P.setOption('casinoHuntKeep', 0, { persist: false });
+
+    P.setOption('casinoKeep', 1000, { persist: false });
+    P.setOption('casinoMaxSpins', 20, { persist: false });
+    P.setOption('casinoMaxLoss', 100, { persist: false });
+    const have = (gold) => ({ gold, pokedex: [16, 137] });
+    assert.ok(!P.casinoDecision(have(1005)).play, 'Porygon obtenu : ₽1005 − ₽10 sous le seuil de ₽1000');
+    assert.ok(P.casinoDecision(have(1010)).play, 'au seuil après le tour : on joue');
+    assert.ok(!P.casinoDecision(have(5000), { funGold: 5000, funSpins: 20 }).play, '20 tours joués dans la visite');
+    assert.ok(!P.casinoDecision(have(4900), { funGold: 5000, funSpins: 5 }).play, '₽100 perdus dans la visite');
+    assert.ok(P.casinoDecision(have(4950), { funGold: 5000, funSpins: 5 }).play, '₽50 perdus, 5 tours : on continue');
+
+    P.setOption('casino', false, { persist: false });
+    assert.ok(!P.casinoDecision(hunt).play, 'casino désactivé');
+  } finally { P.setOption('casino', true, { persist: false }); delete P.Rt.D.config.slotMachine; }
+});

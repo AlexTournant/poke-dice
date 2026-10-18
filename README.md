@@ -47,6 +47,7 @@ Une fois la Ligue battue, le bot passe à la région suivante (Progression, Farm
 ### Routines (tous modes)
 
 - **Roue de la fortune** : le tour gratuit du jour.
+- **Casino** (rencontre des villes, ₽10 le tour) : tant que Porygon, le lot du jackpot, manque au Pokédex, le bot tourne jusqu'au jackpot (1 tour sur 10, ≈ ₽15 de perte nette en moyenne). Ensuite, il ne rejoue que si ses ₽ restent au-dessus d'un seuil réglable, dans la limite de N tours et de ₽X perdus par visite (le casino perd ₽0,50 par tour en moyenne). Le bot ne change pas de zone pour trouver le casino : il joue quand il tombe dessus.
 - **Pension** : fait éclore les Œufs (l'espèce est tirée au hasard, 4× plus souvent parmi celles qui manquent au Pokédex) et y dépose un couple compatible de la Boîte, choisi parmi les plus bas niveaux.
 - **Revanche du Conseil 4** : le Centre compose l'équipe qui bat tout le palier (5 combats sans Centre ni changement d'équipe), puis le bot enchaîne les combats ; il s'arrête après N défaites par jour.
 
